@@ -12,16 +12,30 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // POST /api/auth/google
 exports.googleSignIn = async (req, res) => {
-  const { idToken } = req.body;
-  if (!idToken) {
-    return res.status(400).json({ error: "idToken is required" });
+  const { idToken, accessToken } = req.body;
+  if (!idToken && !accessToken) {
+    return res.status(400).json({ error: "idToken or accessToken is required" });
   }
 
-  const ticket = await googleClient.verifyIdToken({
-    idToken,
-    audience: process.env.GOOGLE_CLIENT_ID,
-  });
-  const payload = ticket.getPayload();
+  let payload;
+
+  if (idToken) {
+    // Preferred: verify the signed ID token directly
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } else {
+    // Fallback for web: exchange access token for user info via Google's userinfo endpoint
+    const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!userInfoRes.ok) {
+      return res.status(401).json({ error: "Invalid Google access token" });
+    }
+    payload = await userInfoRes.json();
+  }
 
   const user = await store.findOrCreateUser({
     googleId:  payload.sub,

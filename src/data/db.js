@@ -65,18 +65,20 @@ async function initDb() {
   `);
 
   // Replace the old (platform, channel_id) unique constraint with a per-user one.
+  // Drop the old global unique constraint if it exists
   await pool.query(`
-    DO $$ BEGIN
-      ALTER TABLE streamers DROP CONSTRAINT IF EXISTS streamers_platform_channel_id_key;
-    EXCEPTION WHEN others THEN NULL;
-    END $$;
+    ALTER TABLE streamers DROP CONSTRAINT IF EXISTS streamers_platform_channel_id_key;
   `);
+  // Add the per-user unique constraint only if it doesn't already exist
   await pool.query(`
     DO $$ BEGIN
-      ALTER TABLE streamers
-        ADD CONSTRAINT streamers_user_platform_channel_unique
-        UNIQUE (user_id, platform, channel_id);
-    EXCEPTION WHEN duplicate_object THEN NULL;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'streamers_user_platform_channel_unique'
+      ) THEN
+        ALTER TABLE streamers
+          ADD CONSTRAINT streamers_user_platform_channel_unique
+          UNIQUE (user_id, platform, channel_id);
+      END IF;
     END $$;
   `);
 }
