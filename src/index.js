@@ -14,6 +14,9 @@ const cors = require("cors");
 const streamerRoutes = require("./routes/streamers");
 const scheduleRoutes = require("./routes/schedule");
 const platformRoutes = require("./routes/platforms");
+const authRoutes     = require("./routes/auth");
+
+const { requireAuth } = require("./middleware/auth");
 
 const store = require("./data/store");
 const { initDb } = require("./data/db");
@@ -41,10 +44,13 @@ app.use((req, _res, next) => {
 });
 
 // ── Routes ───────────────────────────────────────────────────
-// Mount each router at a base path. All routes inside
-// streamerRoutes will be prefixed with /api/streamers, etc.
-app.use("/api/streamers", streamerRoutes);
-app.use("/api/schedule", scheduleRoutes);
+// Auth routes are public — no JWT needed to sign in.
+app.use("/api/auth", authRoutes);
+
+// API routes require a valid JWT (requireAuth attaches req.user).
+// Platforms are static config so they stay public.
+app.use("/api/streamers", requireAuth, streamerRoutes);
+app.use("/api/schedule",  requireAuth, scheduleRoutes);
 app.use("/api/platforms", platformRoutes);
 
 // ── Health check ─────────────────────────────────────────────

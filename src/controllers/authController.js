@@ -1,0 +1,147 @@
+// ============================================================
+// src/controllers/authController.js
+// ============================================================
+
+const { OAuth2Client } = require("google-auth-library");
+const jwt = require("jsonwebtoken");
+const store = require("../data/store");
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+// ── Google sign-in ────────────────────────────────────────────
+
+// POST /api/auth/google
+exports.googleSignIn = async (req, res) => {
+  const { idToken } = req.body;
+  if (!idToken) {
+    return res.status(400).json({ error: "idToken is required" });
+  }
+
+  const ticket = await googleClient.verifyIdToken({
+    idToken,
+    audience: process.env.GOOGLE_CLIENT_ID,
+  });
+  const payload = ticket.getPayload();
+
+  const user = await store.findOrCreateUser({
+    googleId:  payload.sub,
+    email:     payload.email,
+    name:      payload.name,
+    avatarUrl: payload.picture,
+  });
+
+  const token = jwt.sign(
+    { userId: user.id },
+    process.env.JWT_SECRET,
+    { expiresIn: "30d" }
+  );
+
+  res.json({ token, user });
+};
+
+// GET /api/auth/me
+exports.me = async (req, res) => {
+  const user = await store.getUserById(req.user.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json(user);
+};
+
+// ── Twitch connect ────────────────────────────────────────────
+
+// POST /api/auth/twitch/connect
+exports.twitchConnect = async (req, res) => {
+  const { accessToken } = req.body;
+  if (!accessToken) {
+    return res.status(400).json({ error: "accessToken is required" });
+  }
+
+  const validateRes = await fetch("https://id.twitch.tv/oauth2/validate", {
+    headers: { Authorization: `OAuth ${accessToken}` },
+  });
+
+  if (!validateRes.ok) {
+    return res.status(401).json({ error: "Invalid Twitch access token" });
+  }
+
+  const { user_id, login } = await validateRes.json();
+
+  const user = await store.updateUserTwitch(req.user.userId, {
+    twitchId:     user_id,
+    accessToken,
+    refreshToken: null,
+  });
+
+  res.json({ user, twitchLogin: login });
+};
+
+// ── Twitch import ─────────────────────────────────────────────
+
+// POST /api/auth/twitch/import
+exports.twitchImport = async (req, res) => {
+  const tokens = await store.getUserTwitchTokens(req.user.userId);
+  if (!tokens?.twitchId || !tokens?.accessToken) {
+    return res.status(400).json({ error: "Twitch account not connected" });
+  }
+
+  const headers = {
+    Authorization: `Bearer ${tokens.accessToken}`,
+    "Client-Id": process.env.TWITCH_CLIENT_ID,
+  };
+
+  const followsRes = await fetch(
+    `https://api.twitch.tv/helix/channels/followed?user_id=${tokens.twitchId}&first=100`,
+    { headers }
+  );
+
+  if (!followsRes.ok) {
+    const body = await followsRes.json().catch(() => ({}));
+    console.error("[twitchImport] follows fetch failed:", followsRes.status, body);
+    return res.status(502).json({ error: "Failed to fetch Twitch follows — token may be expired" });
+  }
+
+  const { data: follows } = await followsRes.json();
+  if (!follows?.length) {
+    return res.json({ imported: 0, skipped: 0 });
+  }
+
+  // Batch-fetch user profiles to get avatar URLs
+  const loginParams = follows
+    .map((f) => `login=${encodeURIComponent(f.broadcaster_login)}`)
+    .join("&");
+
+  const usersRes = await fetch(
+    `https://api.twitch.tv/helix/users?${loginParams}`,
+    { headers }
+  );
+  const { data: twitchUsers } = await usersRes.json();
+  const avatarMap = Object.fromEntries(
+    (twitchUsers ?? []).map((u) => [u.login, u.profile_image_url])
+  );
+
+  const existing = await store.getStreamersByUser(req.user.userId);
+  const existingKeys = new Set(existing.map((s) => `twitch:${s.channelId}`));
+
+  let imported = 0;
+  let skipped  = 0;
+
+  for (const follow of follows) {
+    const key = `twitch:${follow.broadcaster_login}`;
+    if (existingKeys.has(key)) {
+      skipped++;
+      continue;
+    }
+
+    await store.addStreamer({
+      userId:      req.user.userId,
+      displayName: follow.broadcaster_name,
+      platform:    "twitch",
+      channelId:   follow.broadcaster_login,
+      channelUrl:  `https://twitch.tv/${follow.broadcaster_login}`,
+      avatarUrl:   avatarMap[follow.broadcaster_login] ?? null,
+      color:       "#6B6B88",
+    });
+    imported++;
+  }
+
+  res.json({ imported, skipped });
+};
