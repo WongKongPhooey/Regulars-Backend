@@ -12,22 +12,50 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // POST /api/auth/google
 exports.googleSignIn = async (req, res) => {
-  const { idToken, accessToken } = req.body;
-  if (!idToken && !accessToken) {
-    return res.status(400).json({ error: "idToken or accessToken is required" });
+  const { idToken, accessToken, code, codeVerifier, redirectUri } = req.body;
+
+  if (!idToken && !accessToken && !code) {
+    return res.status(400).json({ error: "idToken, accessToken, or code is required" });
   }
 
   let payload;
 
-  if (idToken) {
-    // Preferred: verify the signed ID token directly
+  if (code) {
+    // Web PKCE flow: exchange the authorisation code server-side so the
+    // client_secret is never exposed to the browser.
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id:     process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        code_verifier: codeVerifier,
+        grant_type:    "authorization_code",
+        redirect_uri:  redirectUri,
+      }).toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.json();
+      console.error("[auth] Google code exchange failed:", err);
+      return res.status(401).json({ error: "Google code exchange failed" });
+    }
+
+    const tokens = await tokenRes.json();
+    const ticket = await googleClient.verifyIdToken({
+      idToken:  tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } else if (idToken) {
     const ticket = await googleClient.verifyIdToken({
       idToken,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     payload = ticket.getPayload();
   } else {
-    // Fallback for web: exchange access token for user info via Google's userinfo endpoint
+    // Fallback: verify access token via userinfo endpoint
     const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
