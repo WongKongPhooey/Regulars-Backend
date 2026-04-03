@@ -5,7 +5,7 @@
 // ============================================================
 
 // Load environment variables from .env file (e.g. PORT, API keys)
-require("dotenv").config();
+require("dotenv").config({ path: "/home/ubuntu/backend/.env" });
 
 const express = require("express");
 const cors = require("cors");
@@ -14,9 +14,6 @@ const cors = require("cors");
 const streamerRoutes = require("./routes/streamers");
 const scheduleRoutes = require("./routes/schedule");
 const platformRoutes = require("./routes/platforms");
-const authRoutes     = require("./routes/auth");
-
-const { requireAuth } = require("./middleware/auth");
 
 const store = require("./data/store");
 const { initDb } = require("./data/db");
@@ -44,13 +41,10 @@ app.use((req, _res, next) => {
 });
 
 // ── Routes ───────────────────────────────────────────────────
-// Auth routes are public — no JWT needed to sign in.
-app.use("/api/auth", authRoutes);
-
-// API routes require a valid JWT (requireAuth attaches req.user).
-// Platforms are static config so they stay public.
-app.use("/api/streamers", requireAuth, streamerRoutes);
-app.use("/api/schedule",  requireAuth, scheduleRoutes);
+// Mount each router at a base path. All routes inside
+// streamerRoutes will be prefixed with /api/streamers, etc.
+app.use("/api/streamers", streamerRoutes);
+app.use("/api/schedule", scheduleRoutes);
 app.use("/api/platforms", platformRoutes);
 
 // ── Health check ─────────────────────────────────────────────
@@ -105,6 +99,6 @@ initDb()
     });
   })
   .catch((err) => {
-    console.error("❌ Failed to initialise database:", err.message);
+    console.error("❌ Failed to initialise database:", err);
     process.exit(1);
   });

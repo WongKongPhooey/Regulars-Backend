@@ -19,18 +19,6 @@ const pool = new Pool({
 
 async function initDb() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id                   UUID        PRIMARY KEY,
-      google_id            TEXT        UNIQUE NOT NULL,
-      email                TEXT        NOT NULL,
-      name                 TEXT,
-      avatar_url           TEXT,
-      twitch_id            TEXT,
-      twitch_access_token  TEXT,
-      twitch_refresh_token TEXT,
-      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
     CREATE TABLE IF NOT EXISTS streamers (
       id           UUID        PRIMARY KEY,
       display_name TEXT        NOT NULL,
@@ -46,9 +34,6 @@ async function initDb() {
     -- Add color column to existing tables that pre-date this migration
     ALTER TABLE streamers ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT '#6B6B88';
 
-    -- Add user_id column (nullable so existing rows aren't broken)
-    ALTER TABLE streamers ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
-
     CREATE TABLE IF NOT EXISTS schedule_slots (
       id            UUID        PRIMARY KEY,
       streamer_id   UUID        NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
@@ -62,24 +47,6 @@ async function initDb() {
       is_live       BOOLEAN     NOT NULL DEFAULT FALSE,
       thumbnail_url TEXT
     );
-  `);
-
-  // Replace the old (platform, channel_id) unique constraint with a per-user one.
-  // Drop the old global unique constraint if it exists
-  await pool.query(`
-    ALTER TABLE streamers DROP CONSTRAINT IF EXISTS streamers_platform_channel_id_key;
-  `);
-  // Add the per-user unique constraint only if it doesn't already exist
-  await pool.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'streamers_user_platform_channel_unique'
-      ) THEN
-        ALTER TABLE streamers
-          ADD CONSTRAINT streamers_user_platform_channel_unique
-          UNIQUE (user_id, platform, channel_id);
-      END IF;
-    END $$;
   `);
 }
 

@@ -1,15 +1,14 @@
 // ============================================================
 // src/controllers/scheduleController.js
-//
-// All schedule queries are scoped to req.user.userId so each
-// user only sees slots for their own followed streamers.
 // ============================================================
 
 const store = require("../data/store");
 const { fetchScheduleForStreamer } = require("../services/scheduleService");
 
 // GET /api/schedule/week
-exports.getWeek = async (req, res) => {
+// Returns slots for the next 7 days, keyed by date string "YYYY-MM-DD".
+// The frontend consumes this shape directly for both view modes.
+exports.getWeek = async (_req, res) => {
   const now  = new Date();
   const from = new Date(now);
   from.setHours(0, 0, 0, 0);
@@ -17,15 +16,17 @@ exports.getWeek = async (req, res) => {
   const to = new Date(from);
   to.setDate(from.getDate() + 7);
 
-  const slots = await store.getSlotsByDateRange(from, to, req.user.userId);
+  const slots = await store.getSlotsByDateRange(from, to);
 
+  // Group slots by date key so the frontend can look up by day
   const grouped = {};
   slots.forEach((slot) => {
-    const key = slot.startTime.slice(0, 10);
+    const key = slot.startTime.slice(0, 10); // "YYYY-MM-DD"
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(slot);
   });
 
+  // Sort each day's slots chronologically
   Object.values(grouped).forEach((day) =>
     day.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
   );
@@ -34,10 +35,11 @@ exports.getWeek = async (req, res) => {
 };
 
 // GET /api/schedule?from=ISO&to=ISO&platform=twitch
+// Returns a flat array of slots, optionally filtered.
 exports.getAll = async (req, res) => {
   const { from, to, platform } = req.query;
 
-  let slots = await store.getSlotsByUser(req.user.userId);
+  let slots = await store.getAllSlots();
 
   if (from) {
     const fromDate = new Date(from);
@@ -55,11 +57,12 @@ exports.getAll = async (req, res) => {
 };
 
 // POST /api/schedule/refresh/:id
+// Re-fetches the real schedule for a single streamer from their platform API.
 exports.refresh = async (req, res) => {
   const { id } = req.params;
 
   const streamer = await store.getStreamerById(id);
-  if (!streamer || streamer.userId !== req.user.userId) {
+  if (!streamer) {
     return res.status(404).json({ error: "Streamer not found" });
   }
 

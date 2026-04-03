@@ -1,5 +1,12 @@
 // ============================================================
 // src/data/store.js — PostgreSQL-backed data store
+//
+// All functions are async — they return Promises that resolve
+// to the same shapes the controllers already expect, so
+// controller changes are minimal (just add await).
+//
+// DB rows use snake_case; JS objects use camelCase.
+// The row→object helpers below handle the conversion.
 // ============================================================
 
 const { v4: uuidv4 } = require("uuid");
@@ -24,21 +31,12 @@ const PLATFORMS = {
 };
 
 // ── Row mappers ───────────────────────────────────────────────
-function rowToUser(row) {
-  return {
-    id:        row.id,
-    email:     row.email,
-    name:      row.name,
-    avatarUrl: row.avatar_url,
-    twitchId:  row.twitch_id,
-    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-  };
-}
+// node-postgres returns TIMESTAMPTZ columns as JS Date objects.
+// Controllers expect ISO strings, so we convert here.
 
 function rowToStreamer(row) {
   return {
     id:          row.id,
-    userId:      row.user_id,
     displayName: row.display_name,
     platform:    row.platform,
     channelId:   row.channel_id,
@@ -66,73 +64,11 @@ function rowToSlot(row) {
   };
 }
 
-// ── User CRUD ─────────────────────────────────────────────────
-
-async function findOrCreateUser({ googleId, email, name, avatarUrl }) {
-  const { rows: existing } = await pool.query(
-    "SELECT * FROM users WHERE google_id = $1",
-    [googleId]
-  );
-  if (existing[0]) return rowToUser(existing[0]);
-
-  const id = uuidv4();
-  const { rows } = await pool.query(
-    `INSERT INTO users (id, google_id, email, name, avatar_url)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING *`,
-    [id, googleId, email, name, avatarUrl]
-  );
-  return rowToUser(rows[0]);
-}
-
-async function getUserById(id) {
-  const { rows } = await pool.query(
-    "SELECT * FROM users WHERE id = $1",
-    [id]
-  );
-  return rows[0] ? rowToUser(rows[0]) : null;
-}
-
-async function updateUserTwitch(userId, { twitchId, accessToken, refreshToken }) {
-  const { rows } = await pool.query(
-    `UPDATE users
-     SET twitch_id = $1, twitch_access_token = $2, twitch_refresh_token = $3
-     WHERE id = $4
-     RETURNING *`,
-    [twitchId, accessToken, refreshToken, userId]
-  );
-  return rows[0] ? rowToUser(rows[0]) : null;
-}
-
-// Returns raw Twitch tokens — used internally, never sent to client.
-async function getUserTwitchTokens(userId) {
-  const { rows } = await pool.query(
-    "SELECT twitch_access_token, twitch_refresh_token, twitch_id FROM users WHERE id = $1",
-    [userId]
-  );
-  if (!rows[0]) return null;
-  return {
-    twitchId:     rows[0].twitch_id,
-    accessToken:  rows[0].twitch_access_token,
-    refreshToken: rows[0].twitch_refresh_token,
-  };
-}
-
 // ── Streamer CRUD ─────────────────────────────────────────────
 
-// Returns ALL streamers across all users — only used internally for startup schedule refresh.
 async function getAllStreamers() {
   const { rows } = await pool.query(
     "SELECT * FROM streamers ORDER BY added_at"
-  );
-  return rows.map(rowToStreamer);
-}
-
-// Returns streamers belonging to a specific user — used by controllers.
-async function getStreamersByUser(userId) {
-  const { rows } = await pool.query(
-    "SELECT * FROM streamers WHERE user_id = $1 ORDER BY added_at",
-    [userId]
   );
   return rows.map(rowToStreamer);
 }
@@ -148,19 +84,19 @@ async function getStreamerById(id) {
 async function addStreamer(data) {
   const id = uuidv4();
   const { rows } = await pool.query(
-    `INSERT INTO streamers (id, user_id, display_name, platform, channel_id, channel_url, avatar_url, color)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO streamers (id, display_name, platform, channel_id, channel_url, avatar_url, color)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [id, data.userId, data.displayName, data.platform, data.channelId, data.channelUrl, data.avatarUrl, data.color ?? '#6B6B88']
+    [id, data.displayName, data.platform, data.channelId, data.channelUrl, data.avatarUrl, data.color ?? '#6B6B88']
   );
   return rowToStreamer(rows[0]);
 }
 
-async function removeStreamer(id, userId) {
-  // Only deletes if the streamer belongs to the requesting user
+async function removeStreamer(id) {
+  // schedule_slots rows cascade-delete automatically (ON DELETE CASCADE)
   const { rowCount } = await pool.query(
-    "DELETE FROM streamers WHERE id = $1 AND user_id = $2",
-    [id, userId]
+    "DELETE FROM streamers WHERE id = $1",
+    [id]
   );
   return rowCount > 0;
 }
@@ -173,18 +109,8 @@ const SLOT_SELECT = `
   JOIN streamers s ON s.id = ss.streamer_id
 `;
 
-// Returns ALL slots across all users — only used internally.
 async function getAllSlots() {
   const { rows } = await pool.query(SLOT_SELECT);
-  return rows.map(rowToSlot);
-}
-
-// Returns slots belonging to a specific user's streamers.
-async function getSlotsByUser(userId) {
-  const { rows } = await pool.query(
-    `${SLOT_SELECT} WHERE s.user_id = $1`,
-    [userId]
-  );
   return rows.map(rowToSlot);
 }
 
@@ -196,15 +122,16 @@ async function getSlotsByStreamer(streamerId) {
   return rows.map(rowToSlot);
 }
 
-async function getSlotsByDateRange(from, to, userId) {
+async function getSlotsByDateRange(from, to) {
   const { rows } = await pool.query(
-    `${SLOT_SELECT} WHERE s.user_id = $1 AND ss.start_time >= $2 AND ss.start_time <= $3`,
-    [userId, from, to]
+    `${SLOT_SELECT} WHERE ss.start_time >= $1 AND ss.start_time <= $2`,
+    [from, to]
   );
   return rows.map(rowToSlot);
 }
 
 async function refreshStreamerSchedule(streamerId, newSlots) {
+  // Delete old slots first, then insert the fresh batch
   await pool.query(
     "DELETE FROM schedule_slots WHERE streamer_id = $1",
     [streamerId]
@@ -235,20 +162,11 @@ async function refreshStreamerSchedule(streamerId, newSlots) {
 
 module.exports = {
   PLATFORMS,
-  // Users
-  findOrCreateUser,
-  getUserById,
-  updateUserTwitch,
-  getUserTwitchTokens,
-  // Streamers
   getAllStreamers,
-  getStreamersByUser,
   getStreamerById,
   addStreamer,
   removeStreamer,
-  // Schedule
   getAllSlots,
-  getSlotsByUser,
   getSlotsByStreamer,
   getSlotsByDateRange,
   refreshStreamerSchedule,
