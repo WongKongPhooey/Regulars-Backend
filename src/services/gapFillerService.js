@@ -58,9 +58,9 @@ async function getFillersForToday({ streamers, todaySlots }) {
   if (!twitchStreamers.length) return [];
 
   const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  todayStart.setUTCHours(0, 0, 0, 0);
   const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
+  todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
 
   const gaps = findGaps(todaySlots, todayStart, todayEnd);
   if (!gaps.length) return [];
@@ -99,18 +99,32 @@ async function getFillersForToday({ streamers, todaySlots }) {
   const fillerSlots  = [];
   const usedFillIds  = new Set(); // don't repeat the same filler streamer
 
+  // Fetch a pool of candidate streams once, then assign them to gaps
+  let candidates = [];
+  try {
+    candidates = await getTopLiveStreams({
+      gameIds,
+      language,
+      excludeUserIds: followedIds,
+      limit: 20,
+    });
+  } catch (err) {
+    console.warn("[gapFiller] Could not fetch live streams:", err.message);
+    return [];
+  }
+
+  // Each gap gets its own filler stream, split into ~2hr blocks so the
+  // day view doesn't have one enormous card spanning the whole day.
+  const BLOCK_MS = 2 * 60 * 60 * 1000; // 2 hours
+
   for (const gap of gaps) {
-    try {
-      const streams = await getTopLiveStreams({
-        gameIds,
-        language,
-        excludeUserIds: new Set([...followedIds, ...usedFillIds]),
-        limit: 10,
-      });
+    let cursor = gap.start.getTime();
+    while (cursor < gap.end.getTime()) {
+      const blockEnd = Math.min(cursor + BLOCK_MS, gap.end.getTime());
 
-      if (!streams.length) continue;
-
-      const stream = streams[0];
+      // Pick next unused candidate
+      const stream = candidates.find((s) => !usedFillIds.has(s.user_id));
+      if (!stream) break;
       usedFillIds.add(stream.user_id);
 
       fillerSlots.push({
@@ -121,8 +135,8 @@ async function getFillersForToday({ streamers, todaySlots }) {
         platform:      "twitch",
         title:         stream.title,
         category:      stream.game_name,
-        startTime:     gap.start.toISOString(),
-        endTime:       gap.end.toISOString(),
+        startTime:     new Date(cursor).toISOString(),
+        endTime:       new Date(blockEnd).toISOString(),
         channelUrl:    `https://twitch.tv/${stream.user_login}`,
         isLive:        true,
         isFiller:      true,
@@ -131,8 +145,8 @@ async function getFillersForToday({ streamers, todaySlots }) {
           ?.replace("{width}", "320")
           .replace("{height}", "180"),
       });
-    } catch (err) {
-      console.warn("[gapFiller] Skipping gap:", err.message);
+
+      cursor = blockEnd;
     }
   }
 

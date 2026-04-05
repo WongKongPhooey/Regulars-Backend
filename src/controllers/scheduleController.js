@@ -13,10 +13,10 @@ const { getFillersForToday } = require("../services/gapFillerService");
 exports.getWeek = async (req, res) => {
   const now  = new Date();
   const from = new Date(now);
-  from.setHours(0, 0, 0, 0);
+  from.setUTCHours(0, 0, 0, 0);
 
   const to = new Date(from);
-  to.setDate(from.getDate() + 7);
+  to.setUTCDate(from.getUTCDate() + 7);
 
   const slots = await store.getSlotsByDateRange(from, to, req.user.userId);
 
