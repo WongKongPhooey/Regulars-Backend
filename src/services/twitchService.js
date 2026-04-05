@@ -169,4 +169,30 @@ async function lookupStreamer(channelId) {
   };
 }
 
-module.exports = { fetchSchedule, lookupStreamer };
+// ── Fetch channel info for multiple logins ────────────────────
+// Returns array of channel objects with broadcaster_language and game_id.
+async function getChannelInfo(logins) {
+  if (!logins.length) return [];
+  const userParams = logins.map((l) => `login=${encodeURIComponent(l)}`).join("&");
+  const userData = await twitchGet(`/users?${userParams}`);
+  const users = userData.data ?? [];
+  if (!users.length) return [];
+
+  const idParams = users.map((u) => `broadcaster_id=${u.id}`).join("&");
+  const channelData = await twitchGet(`/channels?${idParams}`);
+  return channelData.data ?? [];
+}
+
+// ── Fetch top live streams by game IDs and language ───────────
+// excludeUserIds — Set of broadcaster IDs to exclude (already followed)
+async function getTopLiveStreams({ gameIds, language, excludeUserIds, limit = 10 }) {
+  let path = `/streams?first=${limit}&type=live`;
+  if (language) path += `&language=${encodeURIComponent(language)}`;
+  for (const id of gameIds.slice(0, 3)) path += `&game_id=${encodeURIComponent(id)}`;
+
+  const data = await twitchGet(path);
+  const streams = (data.data ?? []).filter((s) => !excludeUserIds.has(s.user_id));
+  return streams;
+}
+
+module.exports = { fetchSchedule, lookupStreamer, getChannelInfo, getTopLiveStreams };

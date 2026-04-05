@@ -7,6 +7,7 @@
 
 const store = require("../data/store");
 const { fetchScheduleForStreamer } = require("../services/scheduleService");
+const { getFillersForToday } = require("../services/gapFillerService");
 
 // GET /api/schedule/week
 exports.getWeek = async (req, res) => {
@@ -19,8 +20,20 @@ exports.getWeek = async (req, res) => {
 
   const slots = await store.getSlotsByDateRange(from, to, req.user.userId);
 
+  // Gap-fill today only — find live streams matching the user's categories/language
+  const todayKey   = from.toISOString().slice(0, 10);
+  const todaySlots = slots.filter((s) => s.startTime.slice(0, 10) === todayKey);
+
+  let fillerSlots = [];
+  try {
+    const streamers = await store.getStreamersByUser(req.user.userId);
+    fillerSlots = await getFillersForToday({ streamers, todaySlots });
+  } catch (err) {
+    console.warn("[scheduleController] Gap fill failed:", err.message);
+  }
+
   const grouped = {};
-  slots.forEach((slot) => {
+  [...slots, ...fillerSlots].forEach((slot) => {
     const key = slot.startTime.slice(0, 10);
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(slot);
