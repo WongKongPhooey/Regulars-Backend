@@ -195,4 +195,15 @@ async function getTopLiveStreams({ gameIds, language, excludeUserIds, limit = 10
   return streams;
 }
 
-module.exports = { fetchSchedule, lookupStreamer, getChannelInfo, getTopLiveStreams };
+// ── Look up game IDs by name ──────────────────────────────────
+// names — array of game name strings (e.g. ["Football Manager 26", "Minecraft"])
+// Returns array of { id, name } objects
+async function getGamesByName(names) {
+  if (!names.length) return [];
+  const unique = [...new Set(names.filter(Boolean))].slice(0, 10);
+  const params = unique.map((n) => `name=${encodeURIComponent(n)}`).join("&");
+  const data = await twitchGet(`/games?${params}`);
+  return data.data ?? [];
+}
+
+module.exports = { fetchSchedule, lookupStreamer, getChannelInfo, getTopLiveStreams, getGamesByName };

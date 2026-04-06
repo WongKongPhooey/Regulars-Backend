@@ -11,7 +11,7 @@
 // ============================================================
 
 const { v4: uuidv4 } = require("uuid");
-const { getChannelInfo, getTopLiveStreams } = require("./twitchService");
+const { getChannelInfo, getTopLiveStreams, getGamesByName } = require("./twitchService");
 
 const MIN_GAP_MINUTES = 15; // ignore gaps shorter than this
 
@@ -52,8 +52,9 @@ function findGaps(slots, todayStart, todayEnd) {
 // ── Main export ───────────────────────────────────────────────
 // streamers  — user's followed streamers (from store.getStreamersByUser)
 // todaySlots — today's existing schedule slots
+// allSlots   — all stored slots for this user (used to infer game preferences)
 // Returns an array of filler slot objects (never stored in DB).
-async function getFillersForToday({ streamers, todaySlots }) {
+async function getFillersForToday({ streamers, todaySlots, allSlots = [] }) {
   const twitchStreamers = streamers.filter((s) => s.platform === "twitch");
   if (!twitchStreamers.length) return [];
 
@@ -65,7 +66,7 @@ async function getFillersForToday({ streamers, todaySlots }) {
   const gaps = findGaps(todaySlots, todayStart, todayEnd);
   if (!gaps.length) return [];
 
-  // Profile the user's streamers — language and categories
+  // Profile the user's streamers — language from channel info, games from stored slots
   const logins = twitchStreamers.map((s) => s.channelId);
   let channelInfos = [];
   try {
@@ -75,23 +76,63 @@ async function getFillersForToday({ streamers, todaySlots }) {
     return [];
   }
 
-  // Pick the most-common language and top 3 game IDs
+  // Language: pick most common from channel settings
   const langCount = {};
-  const gameCount = {};
   for (const ch of channelInfos) {
     if (ch.broadcaster_language) {
       langCount[ch.broadcaster_language] = (langCount[ch.broadcaster_language] || 0) + 1;
     }
-    if (ch.game_id && ch.game_id !== "0") {
-      gameCount[ch.game_id] = (gameCount[ch.game_id] || 0) + 1;
+  }
+  const language = Object.entries(langCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "en";
+
+  // Games: use the most recent stored slot category per streamer, not channel settings
+  // This reflects what they actually stream rather than their current channel state
+  const streamerIds = new Set(twitchStreamers.map((s) => s.id));
+  const latestCategoryByStreamer = {};
+  for (const slot of [...allSlots].sort((a, b) => new Date(b.startTime) - new Date(a.startTime))) {
+    if (streamerIds.has(slot.streamerId) && slot.category && !latestCategoryByStreamer[slot.streamerId]) {
+      latestCategoryByStreamer[slot.streamerId] = slot.category;
     }
   }
 
-  const language = Object.entries(langCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "en";
-  const gameIds  = Object.entries(gameCount)
+  // Count category frequency across streamers
+  const categoryCount = {};
+  for (const cat of Object.values(latestCategoryByStreamer)) {
+    if (cat && cat.toLowerCase() !== "just chatting") {
+      categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+    }
+  }
+
+  // Top 3 categories by frequency
+  const topCategories = Object.entries(categoryCount)
     .sort((a, b) => b[1] - a[1])
-    .map(([id]) => id)
+    .map(([name]) => name)
     .slice(0, 3);
+
+  // Look up Twitch game IDs for those category names
+  let gameIds = [];
+  if (topCategories.length) {
+    try {
+      const games = await getGamesByName(topCategories);
+      gameIds = games.map((g) => g.id);
+    } catch (err) {
+      console.warn("[gapFiller] Could not look up game IDs:", err.message);
+    }
+  }
+
+  // Fall back to channel info game IDs if we couldn't derive any from slots
+  if (!gameIds.length) {
+    const gameCount = {};
+    for (const ch of channelInfos) {
+      if (ch.game_id && ch.game_id !== "0") {
+        gameCount[ch.game_id] = (gameCount[ch.game_id] || 0) + 1;
+      }
+    }
+    gameIds = Object.entries(gameCount)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id]) => id)
+      .slice(0, 3);
+  }
 
   // IDs to exclude — already followed streamers
   const followedIds = new Set(channelInfos.map((c) => c.broadcaster_id));

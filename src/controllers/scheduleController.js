@@ -27,7 +27,8 @@ exports.getWeek = async (req, res) => {
   let fillerSlots = [];
   try {
     const streamers = await store.getStreamersByUser(req.user.userId);
-    fillerSlots = await getFillersForToday({ streamers, todaySlots });
+    const allSlots  = await store.getSlotsByUser(req.user.userId);
+    fillerSlots = await getFillersForToday({ streamers, todaySlots, allSlots });
   } catch (err) {
     console.warn("[scheduleController] Gap fill failed:", err.message);
   }
