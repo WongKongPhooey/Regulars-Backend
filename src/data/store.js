@@ -168,7 +168,9 @@ async function removeStreamer(id, userId) {
 // ── Schedule queries ──────────────────────────────────────────
 
 const SLOT_SELECT = `
-  SELECT ss.*, s.color AS streamer_color
+  SELECT ss.id, ss.streamer_id, ss.streamer_name, ss.platform, ss.title, ss.category,
+         ss.start_time, ss.end_time, ss.channel_url, ss.is_live, ss.thumbnail_url,
+         s.color AS streamer_color
   FROM schedule_slots ss
   JOIN streamers s ON s.id = ss.streamer_id
 `;
