@@ -22,7 +22,7 @@ exports.getAll = async (req, res) => {
 
 // POST /api/streamers
 exports.create = async (req, res) => {
-  const { displayName, platform, channelId, avatarUrl, color } = req.body;
+  const { displayName, platform, channelId, avatarUrl, color, personId } = req.body;
   const userId = req.user.userId;
 
   const existing = (await store.getStreamersByUser(userId)).find(
@@ -32,12 +32,23 @@ exports.create = async (req, res) => {
     return res.status(409).json({ error: "Already following this streamer" });
   }
 
+  // If personId is supplied, verify it belongs to this user
+  if (personId) {
+    const person = (await store.getStreamersByUser(userId)).find(
+      (s) => s.personId === personId
+    );
+    if (!person) {
+      return res.status(400).json({ error: "Invalid personId" });
+    }
+  }
+
   const profile = await lookupStreamer(platform, channelId).catch(() => null);
   const resolvedAvatarUrl  = profile?.avatarUrl  || avatarUrl || null;
   const resolvedChannelUrl = profile?.channelUrl || buildChannelUrl(platform, channelId);
 
   const newStreamer = await store.addStreamer({
     userId,
+    personId,   // undefined = new person, UUID = link to existing
     displayName,
     platform,
     channelId,

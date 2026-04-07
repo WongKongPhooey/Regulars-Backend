@@ -65,11 +65,9 @@ async function initDb() {
   `);
 
   // Replace the old (platform, channel_id) unique constraint with a per-user one.
-  // Drop the old global unique constraint if it exists
   await pool.query(`
     ALTER TABLE streamers DROP CONSTRAINT IF EXISTS streamers_platform_channel_id_key;
   `);
-  // Add the per-user unique constraint only if it doesn't already exist
   await pool.query(`
     DO $$ BEGIN
       IF NOT EXISTS (
@@ -80,6 +78,15 @@ async function initDb() {
           UNIQUE (user_id, platform, channel_id);
       END IF;
     END $$;
+  `);
+
+  // Add person_id — groups multiple platform entries for the same real-world creator.
+  // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
+  await pool.query(`
+    ALTER TABLE streamers ADD COLUMN IF NOT EXISTS person_id UUID;
+  `);
+  await pool.query(`
+    UPDATE streamers SET person_id = id WHERE person_id IS NULL;
   `);
 }
 

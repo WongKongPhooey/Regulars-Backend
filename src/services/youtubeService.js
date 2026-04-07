@@ -93,7 +93,7 @@ async function fetchSchedule(streamer) {
     console.warn(`[YouTube] Could not check live status for ${streamer.channelId}: ${err.message}`);
   }
 
-  // 2. Fetch upcoming scheduled broadcasts
+  // 2. Fetch upcoming scheduled broadcasts and premieres
   try {
     const upcomingSearch = await ytGet("/search", {
       part: "snippet",
@@ -108,28 +108,50 @@ async function fetchSchedule(streamer) {
     const videos = await getVideoDetails(videoIds);
 
     for (const video of videos) {
+      // Scheduled live stream — has liveStreamingDetails.scheduledStartTime
       const scheduledStart = video.liveStreamingDetails?.scheduledStartTime;
-      if (!scheduledStart) continue;
+      if (scheduledStart) {
+        const start = new Date(scheduledStart);
+        if (start <= now || start > cutoff) continue;
+        const end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
+        slots.push({
+          id: uuidv4(),
+          streamerId: streamer.id,
+          streamerName: streamer.displayName,
+          platform: "youtube",
+          title: video.snippet.title,
+          category: "",
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          channelUrl: `https://youtube.com/watch?v=${video.id}`,
+          isLive: false,
+          thumbnailUrl: video.snippet.thumbnails?.medium?.url,
+        });
+        continue;
+      }
 
-      const start = new Date(scheduledStart);
-      if (start <= now || start > cutoff) continue;
-
-      // YouTube doesn't expose a scheduled end time — estimate 3 hours
-      const end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
-
-      slots.push({
-        id: uuidv4(),
-        streamerId: streamer.id,
-        streamerName: streamer.displayName,
-        platform: "youtube",
-        title: video.snippet.title,
-        category: "",
-        startTime: start.toISOString(),
-        endTime: end.toISOString(),
-        channelUrl: streamer.channelUrl,
-        isLive: false,
-        thumbnailUrl: video.snippet.thumbnails?.medium?.url,
-      });
+      // Premiere — no liveStreamingDetails, but publishedAt is in the future
+      // YouTube sets publishedAt to the premiere time for scheduled premieres
+      const publishedAt = video.snippet?.publishedAt;
+      if (publishedAt) {
+        const start = new Date(publishedAt);
+        if (start <= now || start > cutoff) continue;
+        // Premieres are typically shorter — estimate 1 hour
+        const end = new Date(start.getTime() + 60 * 60 * 1000);
+        slots.push({
+          id: uuidv4(),
+          streamerId: streamer.id,
+          streamerName: streamer.displayName,
+          platform: "youtube",
+          title: video.snippet.title,
+          category: "Premiere",
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          channelUrl: `https://youtube.com/watch?v=${video.id}`,
+          isLive: false,
+          thumbnailUrl: video.snippet.thumbnails?.medium?.url,
+        });
+      }
     }
   } catch (err) {
     console.warn(`[YouTube] Schedule fetch failed for ${streamer.channelId}: ${err.message}`);

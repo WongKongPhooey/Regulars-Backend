@@ -38,6 +38,7 @@ function rowToUser(row) {
 function rowToStreamer(row) {
   return {
     id:          row.id,
+    personId:    row.person_id ?? row.id,
     userId:      row.user_id,
     displayName: row.display_name,
     platform:    row.platform,
@@ -147,11 +148,13 @@ async function getStreamerById(id) {
 
 async function addStreamer(data) {
   const id = uuidv4();
+  // person_id defaults to this streamer's own id unless linking to an existing person
+  const personId = data.personId ?? id;
   const { rows } = await pool.query(
-    `INSERT INTO streamers (id, user_id, display_name, platform, channel_id, channel_url, avatar_url, color)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO streamers (id, person_id, user_id, display_name, platform, channel_id, channel_url, avatar_url, color)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [id, data.userId, data.displayName, data.platform, data.channelId, data.channelUrl, data.avatarUrl, data.color ?? '#6B6B88']
+    [id, personId, data.userId, data.displayName, data.platform, data.channelId, data.channelUrl, data.avatarUrl, data.color ?? '#6B6B88']
   );
   return rowToStreamer(rows[0]);
 }
