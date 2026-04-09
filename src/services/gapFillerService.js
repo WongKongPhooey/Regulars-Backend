@@ -11,7 +11,8 @@
 // ============================================================
 
 const { v4: uuidv4 } = require("uuid");
-const { getChannelInfo, getTopLiveStreams, getGamesByName } = require("./twitchService");
+const { getChannelInfo, getTopLiveStreams, getGamesByName, getLiveStreamsByLogins } = require("./twitchService");
+const store = require("../data/store");
 
 const MIN_GAP_MINUTES = 15; // ignore gaps shorter than this
 
@@ -53,8 +54,9 @@ function findGaps(slots, todayStart, todayEnd) {
 // streamers  — user's followed streamers (from store.getStreamersByUser)
 // todaySlots — today's existing schedule slots
 // allSlots   — all stored slots for this user (used to infer game preferences)
+// userId     — the requesting user's ID (used to find paid creators to exclude)
 // Returns an array of filler slot objects (never stored in DB).
-async function getFillersForToday({ streamers, todaySlots, allSlots = [] }) {
+async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId }) {
   const twitchStreamers = streamers.filter((s) => s.platform === "twitch");
   if (!twitchStreamers.length) return [];
 
@@ -135,15 +137,41 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [] }) {
   }
 
   // IDs to exclude — already followed streamers
-  const followedIds = new Set(channelInfos.map((c) => c.broadcaster_id));
+  const followedIds    = new Set(channelInfos.map((c) => c.broadcaster_id));
+  const followedLogins = channelInfos.map((c) => c.broadcaster_login);
+
+  // ── Paid creator priority ─────────────────────────────────────
+  // Fetch creators with pack credits, excluding channels this user already follows.
+  // Only Twitch paid creators are relevant since the gap filler is Twitch-only.
+  let paidCandidates = [];
+  try {
+    const paidCreators  = await store.getActivePaidCreators(followedLogins);
+    const twitchPaid    = paidCreators.filter((c) => c.platform === "twitch");
+    if (twitchPaid.length) {
+      const paidLogins  = twitchPaid.map((c) => c.channelId);
+      const liveStreams  = await getLiveStreamsByLogins(paidLogins);
+      paidCandidates = liveStreams.map((stream) => {
+        const creator = twitchPaid.find((c) => c.channelId === stream.user_login);
+        return { ...stream, isPremium: true, creatorUserId: creator?.userId };
+      });
+      // Game-matching paid creators first, then others
+      paidCandidates.sort((a, b) => {
+        const aMatch = gameIds.includes(a.game_id) ? 0 : 1;
+        const bMatch = gameIds.includes(b.game_id) ? 0 : 1;
+        return aMatch - bMatch;
+      });
+    }
+  } catch (err) {
+    console.warn("[gapFiller] Could not fetch paid creators:", err.message);
+  }
 
   const fillerSlots  = [];
   const usedFillIds  = new Set(); // don't repeat the same filler streamer
 
-  // Fetch a pool of candidate streams once, then assign them to gaps
-  let candidates = [];
+  // Fetch a pool of regular candidate streams, then combine with paid priority list
+  let regularCandidates = [];
   try {
-    candidates = await getTopLiveStreams({
+    regularCandidates = await getTopLiveStreams({
       gameIds,
       language,
       excludeUserIds: followedIds,
@@ -153,6 +181,9 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [] }) {
     console.warn("[gapFiller] Could not fetch live streams:", err.message);
     return [];
   }
+
+  // Paid creators appear first; regulars fill the rest
+  let candidates = [...paidCandidates, ...regularCandidates];
 
   // Each gap gets its own filler stream, split into ~2hr blocks so the
   // day view doesn't have one enormous card spanning the whole day.
@@ -181,6 +212,8 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [] }) {
         channelUrl:    `https://twitch.tv/${stream.user_login}`,
         isLive:        true,
         isFiller:      true,
+        isPremium:     stream.isPremium ?? false,
+        creatorUserId: stream.creatorUserId ?? null,
         viewerCount:   stream.viewer_count,
         thumbnailUrl:  stream.thumbnail_url
           ?.replace("{width}", "320")

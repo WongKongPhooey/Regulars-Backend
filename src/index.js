@@ -15,6 +15,7 @@ const streamerRoutes = require("./routes/streamers");
 const scheduleRoutes = require("./routes/schedule");
 const platformRoutes = require("./routes/platforms");
 const authRoutes     = require("./routes/auth");
+const creatorRoutes  = require("./routes/creator");
 
 const { requireAuth } = require("./middleware/auth");
 
@@ -26,14 +27,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── Middleware ───────────────────────────────────────────────
-// Middleware runs on EVERY request before it hits a route handler.
 
-// cors() allows the frontend (running on a different port) to
-// call this API. Without this, browsers block cross-origin requests.
 app.use(cors());
 
-// express.json() parses incoming request bodies as JSON so we can
-// read req.body in our route handlers.
+// Stripe webhook needs raw body — must be registered BEFORE express.json()
+app.use(
+  "/api/creator/webhook",
+  express.raw({ type: "application/json" })
+);
+
 app.use(express.json());
 
 // Simple request logger — logs method + URL for every request.
@@ -52,6 +54,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/streamers", requireAuth, streamerRoutes);
 app.use("/api/schedule",  requireAuth, scheduleRoutes);
 app.use("/api/platforms", platformRoutes);
+app.use("/api/creator",  creatorRoutes);
 
 // ── Health check ─────────────────────────────────────────────
 // A simple endpoint to confirm the server is running.

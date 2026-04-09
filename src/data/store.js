@@ -238,6 +238,116 @@ async function refreshStreamerSchedule(streamerId, newSlots) {
   }
 }
 
+// ── Creator profiles ──────────────────────────────────────────
+
+function rowToCreator(row) {
+  return {
+    id:          row.id,
+    userId:      row.user_id,
+    platform:    row.platform,
+    channelId:   row.channel_id,
+    channelUrl:  row.channel_url,
+    displayName: row.display_name,
+    avatarUrl:   row.avatar_url,
+    createdAt:   row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+  };
+}
+
+async function getCreatorProfile(userId) {
+  const { rows } = await pool.query(
+    "SELECT * FROM creator_profiles WHERE user_id = $1",
+    [userId]
+  );
+  return rows[0] ? rowToCreator(rows[0]) : null;
+}
+
+async function upsertCreatorProfile(data) {
+  const id = uuidv4();
+  const { rows } = await pool.query(
+    `INSERT INTO creator_profiles (id, user_id, platform, channel_id, channel_url, display_name, avatar_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (user_id) DO UPDATE SET
+       platform     = EXCLUDED.platform,
+       channel_id   = EXCLUDED.channel_id,
+       channel_url  = EXCLUDED.channel_url,
+       display_name = EXCLUDED.display_name,
+       avatar_url   = EXCLUDED.avatar_url
+     RETURNING *`,
+    [id, data.userId, data.platform, data.channelId, data.channelUrl, data.displayName, data.avatarUrl ?? null]
+  );
+  return rowToCreator(rows[0]);
+}
+
+// ── Promotion packs ───────────────────────────────────────────
+
+function rowToPack(row) {
+  return {
+    id:               row.id,
+    userId:           row.user_id,
+    viewsRemaining:   row.views_remaining,
+    clicksRemaining:  row.clicks_remaining,
+    updatedAt:        row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+  };
+}
+
+async function getPackBalance(userId) {
+  const { rows } = await pool.query(
+    "SELECT * FROM promotion_packs WHERE user_id = $1",
+    [userId]
+  );
+  return rows[0] ? rowToPack(rows[0]) : { viewsRemaining: 0, clicksRemaining: 0 };
+}
+
+// Called by Stripe webhook after successful payment
+async function addPackCredits(userId, views, clicks) {
+  const id = uuidv4();
+  const { rows } = await pool.query(
+    `INSERT INTO promotion_packs (id, user_id, views_remaining, clicks_remaining)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id) DO UPDATE SET
+       views_remaining  = promotion_packs.views_remaining  + EXCLUDED.views_remaining,
+       clicks_remaining = promotion_packs.clicks_remaining + EXCLUDED.clicks_remaining,
+       updated_at       = NOW()
+     RETURNING *`,
+    [id, userId, views, clicks]
+  );
+  return rowToPack(rows[0]);
+}
+
+// Decrement on impression/click — floor at 0, no-op if already 0
+async function decrementPackViews(userId) {
+  await pool.query(
+    `UPDATE promotion_packs
+     SET views_remaining = GREATEST(views_remaining - 1, 0), updated_at = NOW()
+     WHERE user_id = $1 AND views_remaining > 0`,
+    [userId]
+  );
+}
+
+async function decrementPackClicks(userId) {
+  await pool.query(
+    `UPDATE promotion_packs
+     SET clicks_remaining = GREATEST(clicks_remaining - 1, 0), updated_at = NOW()
+     WHERE user_id = $1 AND clicks_remaining > 0`,
+    [userId]
+  );
+}
+
+// Returns all paid creators who are currently live on Twitch with credits remaining,
+// excluding those already followed by the requesting user.
+async function getActivePaidCreators(excludeChannelIds = []) {
+  const { rows } = await pool.query(
+    `SELECT cp.*, pp.views_remaining, pp.clicks_remaining
+     FROM creator_profiles cp
+     JOIN promotion_packs pp ON pp.user_id = cp.user_id
+     WHERE pp.views_remaining > 0 OR pp.clicks_remaining > 0`
+  );
+  const excluded = new Set(excludeChannelIds);
+  return rows
+    .filter((r) => !excluded.has(r.channel_id))
+    .map((r) => ({ ...rowToCreator(r), viewsRemaining: r.views_remaining, clicksRemaining: r.clicks_remaining }));
+}
+
 module.exports = {
   PLATFORMS,
   // Users
@@ -257,4 +367,13 @@ module.exports = {
   getSlotsByStreamer,
   getSlotsByDateRange,
   refreshStreamerSchedule,
+  // Creator profiles
+  getCreatorProfile,
+  upsertCreatorProfile,
+  // Promotion packs
+  getPackBalance,
+  addPackCredits,
+  decrementPackViews,
+  decrementPackClicks,
+  getActivePaidCreators,
 };

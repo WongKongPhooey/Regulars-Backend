@@ -206,4 +206,14 @@ async function getGamesByName(names) {
   return data.data ?? [];
 }
 
-module.exports = { fetchSchedule, lookupStreamer, getChannelInfo, getTopLiveStreams, getGamesByName };
+// ── Fetch live stream data for specific logins ────────────────
+// Returns stream objects for any of the given logins that are currently live.
+async function getLiveStreamsByLogins(logins) {
+  if (!logins.length) return [];
+  const unique = [...new Set(logins)].slice(0, 100);
+  const params = unique.map((l) => `user_login=${encodeURIComponent(l)}`).join("&");
+  const data = await twitchGet(`/streams?${params}&first=100&type=live`);
+  return data.data ?? [];
+}
+
+module.exports = { fetchSchedule, lookupStreamer, getChannelInfo, getTopLiveStreams, getGamesByName, getLiveStreamsByLogins };

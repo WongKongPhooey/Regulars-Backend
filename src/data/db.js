@@ -80,6 +80,43 @@ async function initDb() {
     END $$;
   `);
 
+  // Creator profiles — a user's own channel (for promotion)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS creator_profiles (
+      id           UUID        PRIMARY KEY,
+      user_id      UUID        NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      platform     TEXT        NOT NULL,
+      channel_id   TEXT        NOT NULL,
+      channel_url  TEXT        NOT NULL,
+      display_name TEXT        NOT NULL,
+      avatar_url   TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Promotion packs — views and clicks balance per user
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS promotion_packs (
+      id           UUID        PRIMARY KEY,
+      user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      views_remaining  INTEGER NOT NULL DEFAULT 0,
+      clicks_remaining INTEGER NOT NULL DEFAULT 0,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // One pack balance row per user (upsert on purchase)
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'promotion_packs_user_id_key'
+      ) THEN
+        ALTER TABLE promotion_packs ADD CONSTRAINT promotion_packs_user_id_key UNIQUE (user_id);
+      END IF;
+    END $$;
+  `);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`
