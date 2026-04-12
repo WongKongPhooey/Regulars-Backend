@@ -7,9 +7,15 @@
 
 const store  = require("../data/store");
 const { lookupStreamer } = require("../services/scheduleService");
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const PACK_PRICE_ID = process.env.STRIPE_PACK_PRICE_ID; // created in Stripe dashboard
+
+// Lazy-init Stripe — avoids crash at require time if env vars aren't loaded yet
+let _stripe;
+function getStripe() {
+  if (!_stripe) _stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+  return _stripe;
+}
 const PACK_VIEWS    = 1000;
 const PACK_CLICKS   = 100;
 
@@ -46,15 +52,15 @@ exports.connectChannel = async (req, res) => {
 
 // POST /api/creator/checkout — create a Stripe Checkout session
 exports.createCheckout = async (req, res) => {
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     mode:                "payment",
     payment_method_types: ["card"],
     line_items: [
       { price: PACK_PRICE_ID, quantity: 1 },
     ],
     metadata: { userId: req.user.userId },
-    success_url: `${process.env.FRONTEND_URL}/settings?payment=success`,
-    cancel_url:  `${process.env.FRONTEND_URL}/settings?payment=cancelled`,
+    success_url: `${process.env.FRONTEND_URL}?payment=success`,
+    cancel_url:  `${process.env.FRONTEND_URL}?payment=cancelled`,
   });
   res.json({ url: session.url });
 };
@@ -78,7 +84,7 @@ exports.webhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = getStripe().webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     return res.status(400).send(`Webhook error: ${err.message}`);
   }
