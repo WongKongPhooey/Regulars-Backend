@@ -117,6 +117,9 @@ async function initDb() {
     END $$;
   `);
 
+  await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS last_session_id TEXT`);
+  await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS clicks_total INTEGER NOT NULL DEFAULT 0`);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`

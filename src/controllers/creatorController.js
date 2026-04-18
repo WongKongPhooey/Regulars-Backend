@@ -16,7 +16,6 @@ function getStripe() {
   if (!_stripe) _stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
   return _stripe;
 }
-const PACK_VIEWS    = 1000;
 const PACK_CLICKS   = 100;
 
 // GET /api/creator/profile
@@ -65,10 +64,10 @@ exports.createCheckout = async (req, res) => {
   res.json({ url: session.url });
 };
 
-// POST /api/creator/:creatorUserId/view — decrement view credit (called on filler slot render)
+// POST /api/creator/:creatorUserId/view — increment view counter (called on filler slot render)
 exports.trackView = async (req, res) => {
   const { creatorUserId } = req.params;
-  await store.decrementPackViews(creatorUserId);
+  await store.incrementPackViews(creatorUserId);
   res.json({ ok: true });
 };
 
@@ -77,6 +76,34 @@ exports.trackClick = async (req, res) => {
   const { creatorUserId } = req.params;
   await store.decrementPackClicks(creatorUserId);
   res.json({ ok: true });
+};
+
+// POST /api/creator/verify-payment — called by frontend after Stripe redirect
+// Checks the most recent checkout session and credits the user if paid.
+// This is a fallback for when the webhook hasn't fired yet (e.g. local dev).
+exports.verifyPayment = async (req, res) => {
+  const sessions = await getStripe().checkout.sessions.list({
+    limit: 1,
+  });
+
+  const session = sessions.data.find(
+    (s) => s.metadata?.userId === req.user.userId && s.payment_status === "paid"
+  );
+
+  if (!session) {
+    return res.json({ credited: false });
+  }
+
+  // Check if we've already credited this session (store session ID to prevent double-credit)
+  const balance = await store.getPackBalance(req.user.userId);
+  if (balance.lastSessionId === session.id) {
+    return res.json({ credited: false, balance });
+  }
+
+  await store.addPackCredits(req.user.userId, PACK_CLICKS, session.id);
+  const updated = await store.getPackBalance(req.user.userId);
+  console.log(`[creator] Verified payment — added ${PACK_CLICKS} clicks to user ${req.user.userId}`);
+  res.json({ credited: true, balance: updated });
 };
 
 // POST /api/creator/webhook — Stripe sends events here (no auth middleware)
@@ -93,8 +120,8 @@ exports.webhook = async (req, res) => {
     const session = event.data.object;
     const userId  = session.metadata?.userId;
     if (userId) {
-      await store.addPackCredits(userId, PACK_VIEWS, PACK_CLICKS);
-      console.log(`[creator] Added ${PACK_VIEWS} views + ${PACK_CLICKS} clicks to user ${userId}`);
+      await store.addPackCredits(userId, PACK_CLICKS);
+      console.log(`[creator] Added ${PACK_CLICKS} clicks to user ${userId}`);
     }
   }
 

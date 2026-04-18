@@ -16,6 +16,7 @@ const scheduleRoutes = require("./routes/schedule");
 const platformRoutes = require("./routes/platforms");
 const authRoutes     = require("./routes/auth");
 const creatorRoutes  = require("./routes/creator");
+const discoverRoutes = require("./routes/discover");
 
 const { requireAuth } = require("./middleware/auth");
 
@@ -55,6 +56,7 @@ app.use("/api/streamers", requireAuth, streamerRoutes);
 app.use("/api/schedule",  requireAuth, scheduleRoutes);
 app.use("/api/platforms", platformRoutes);
 app.use("/api/creator",  creatorRoutes);
+app.use("/api/discover", requireAuth, discoverRoutes);
 
 // ── Health check ─────────────────────────────────────────────
 // A simple endpoint to confirm the server is running.

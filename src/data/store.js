@@ -284,8 +284,10 @@ function rowToPack(row) {
   return {
     id:               row.id,
     userId:           row.user_id,
-    viewsRemaining:   row.views_remaining,
+    totalViews:       row.views_remaining,   // repurposed: counts UP (impressions since pack purchase)
     clicksRemaining:  row.clicks_remaining,
+    clicksTotal:      row.clicks_total ?? 0, // total clicks received (counts UP)
+    lastSessionId:    row.last_session_id ?? null,
     updatedAt:        row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
 }
@@ -295,57 +297,62 @@ async function getPackBalance(userId) {
     "SELECT * FROM promotion_packs WHERE user_id = $1",
     [userId]
   );
-  return rows[0] ? rowToPack(rows[0]) : { viewsRemaining: 0, clicksRemaining: 0 };
+  return rows[0] ? rowToPack(rows[0]) : { totalViews: 0, clicksRemaining: 0, clicksTotal: 0 };
 }
 
-// Called by Stripe webhook after successful payment
-async function addPackCredits(userId, views, clicks) {
+// Called by Stripe webhook or verify-payment after successful payment.
+// Resets views to 0 (new tracking period) and adds clicks.
+async function addPackCredits(userId, clicks, sessionId = null) {
   const id = uuidv4();
   const { rows } = await pool.query(
-    `INSERT INTO promotion_packs (id, user_id, views_remaining, clicks_remaining)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO promotion_packs (id, user_id, views_remaining, clicks_remaining, last_session_id)
+     VALUES ($1, $2, 0, $3, $4)
      ON CONFLICT (user_id) DO UPDATE SET
-       views_remaining  = promotion_packs.views_remaining  + EXCLUDED.views_remaining,
+       views_remaining  = 0,
        clicks_remaining = promotion_packs.clicks_remaining + EXCLUDED.clicks_remaining,
+       last_session_id  = COALESCE(EXCLUDED.last_session_id, promotion_packs.last_session_id),
        updated_at       = NOW()
      RETURNING *`,
-    [id, userId, views, clicks]
+    [id, userId, clicks, sessionId]
   );
   return rowToPack(rows[0]);
 }
 
-// Decrement on impression/click — floor at 0, no-op if already 0
-async function decrementPackViews(userId) {
+// Increment view count (impression tracking — not a balance, just a counter)
+async function incrementPackViews(userId) {
   await pool.query(
     `UPDATE promotion_packs
-     SET views_remaining = GREATEST(views_remaining - 1, 0), updated_at = NOW()
-     WHERE user_id = $1 AND views_remaining > 0`,
+     SET views_remaining = views_remaining + 1, updated_at = NOW()
+     WHERE user_id = $1`,
     [userId]
   );
 }
 
+// Decrement click credit — floor at 0; also increment total clicks counter
 async function decrementPackClicks(userId) {
   await pool.query(
     `UPDATE promotion_packs
-     SET clicks_remaining = GREATEST(clicks_remaining - 1, 0), updated_at = NOW()
+     SET clicks_remaining = GREATEST(clicks_remaining - 1, 0),
+         clicks_total     = clicks_total + 1,
+         updated_at       = NOW()
      WHERE user_id = $1 AND clicks_remaining > 0`,
     [userId]
   );
 }
 
-// Returns all paid creators who are currently live on Twitch with credits remaining,
+// Returns paid creators with click credits remaining,
 // excluding those already followed by the requesting user.
 async function getActivePaidCreators(excludeChannelIds = []) {
   const { rows } = await pool.query(
     `SELECT cp.*, pp.views_remaining, pp.clicks_remaining
      FROM creator_profiles cp
      JOIN promotion_packs pp ON pp.user_id = cp.user_id
-     WHERE pp.views_remaining > 0 OR pp.clicks_remaining > 0`
+     WHERE pp.clicks_remaining > 0`
   );
   const excluded = new Set(excludeChannelIds);
   return rows
     .filter((r) => !excluded.has(r.channel_id))
-    .map((r) => ({ ...rowToCreator(r), viewsRemaining: r.views_remaining, clicksRemaining: r.clicks_remaining }));
+    .map((r) => ({ ...rowToCreator(r), totalViews: r.views_remaining, clicksRemaining: r.clicks_remaining }));
 }
 
 module.exports = {
@@ -373,7 +380,7 @@ module.exports = {
   // Promotion packs
   getPackBalance,
   addPackCredits,
-  decrementPackViews,
+  incrementPackViews,
   decrementPackClicks,
   getActivePaidCreators,
 };

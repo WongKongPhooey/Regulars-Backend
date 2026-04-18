@@ -87,8 +87,9 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
   }
   const language = Object.entries(langCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "en";
 
-  // Games: use the most recent stored slot category per streamer, not channel settings
-  // This reflects what they actually stream rather than their current channel state
+  // Games: collect one unique category per streamer from slot history,
+  // then supplement with channel info for streamers without stored slots.
+  // This ensures variety rather than being dominated by the most common game.
   const streamerIds = new Set(twitchStreamers.map((s) => s.id));
   const latestCategoryByStreamer = {};
   for (const slot of [...allSlots].sort((a, b) => new Date(b.startTime) - new Date(a.startTime))) {
@@ -97,32 +98,41 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     }
   }
 
-  // Count category frequency across streamers
-  const categoryCount = {};
-  for (const cat of Object.values(latestCategoryByStreamer)) {
-    if (cat && cat.toLowerCase() !== "just chatting") {
-      categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+  // One category per streamer (deduplicated), filtering out "Just Chatting"
+  const uniqueCategories = [
+    ...new Set(
+      Object.values(latestCategoryByStreamer).filter(
+        (cat) => cat && cat.toLowerCase() !== "just chatting"
+      )
+    ),
+  ];
+
+  // Also add game IDs from channel info for streamers that had no stored slots
+  const streamersWithSlots = new Set(Object.keys(latestCategoryByStreamer));
+  const channelInfoGameIds = [];
+  for (const ch of channelInfos) {
+    if (!streamersWithSlots.has(ch.broadcaster_id) && ch.game_id && ch.game_id !== "0") {
+      channelInfoGameIds.push(ch.game_id);
     }
   }
 
-  // Top 3 categories by frequency
-  const topCategories = Object.entries(categoryCount)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name]) => name)
-    .slice(0, 3);
-
-  // Look up Twitch game IDs for those category names
+  // Look up Twitch game IDs for the unique category names (max 10)
   let gameIds = [];
-  if (topCategories.length) {
+  if (uniqueCategories.length) {
     try {
-      const games = await getGamesByName(topCategories);
+      const games = await getGamesByName(uniqueCategories.slice(0, 10));
       gameIds = games.map((g) => g.id);
     } catch (err) {
       console.warn("[gapFiller] Could not look up game IDs:", err.message);
     }
   }
 
-  // Fall back to channel info game IDs if we couldn't derive any from slots
+  // Merge in channel info game IDs (for streamers without slot history)
+  for (const gid of channelInfoGameIds) {
+    if (!gameIds.includes(gid)) gameIds.push(gid);
+  }
+
+  // Fall back to all channel info game IDs if we still have nothing
   if (!gameIds.length) {
     const gameCount = {};
     for (const ch of channelInfos) {
@@ -133,7 +143,7 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     gameIds = Object.entries(gameCount)
       .sort((a, b) => b[1] - a[1])
       .map(([id]) => id)
-      .slice(0, 3);
+      .slice(0, 5);
   }
 
   // IDs to exclude — already followed streamers
@@ -149,11 +159,38 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     const twitchPaid    = paidCreators.filter((c) => c.platform === "twitch");
     if (twitchPaid.length) {
       const paidLogins  = twitchPaid.map((c) => c.channelId);
-      const liveStreams  = await getLiveStreamsByLogins(paidLogins);
+      let liveStreams    = [];
+      try {
+        liveStreams = await getLiveStreamsByLogins(paidLogins);
+      } catch (err) {
+        console.warn("[gapFiller] Could not check paid creator live status:", err.message);
+      }
+
+      // Live paid creators get real stream data
       paidCandidates = liveStreams.map((stream) => {
         const creator = twitchPaid.find((c) => c.channelId === stream.user_login);
         return { ...stream, isPremium: true, creatorUserId: creator?.userId };
       });
+
+      // Paid creators who aren't live still get a promoted slot using their profile
+      const liveLogins = new Set(liveStreams.map((s) => s.user_login));
+      for (const creator of twitchPaid) {
+        if (!liveLogins.has(creator.channelId)) {
+          paidCandidates.push({
+            user_id:       creator.id,
+            user_login:    creator.channelId,
+            user_name:     creator.displayName,
+            title:         `${creator.displayName} — Promoted`,
+            game_name:     "Football Manager 2026",
+            game_id:       null,
+            viewer_count:  0,
+            thumbnail_url: creator.avatarUrl,
+            isPremium:     true,
+            creatorUserId: creator.userId,
+          });
+        }
+      }
+
       // Game-matching paid creators first, then others
       paidCandidates.sort((a, b) => {
         const aMatch = gameIds.includes(a.game_id) ? 0 : 1;
@@ -168,15 +205,26 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
   const fillerSlots  = [];
   const usedFillIds  = new Set(); // don't repeat the same filler streamer
 
-  // Fetch a pool of regular candidate streams, then combine with paid priority list
+  // Fetch live candidates in batches of 3 game IDs (Twitch API limit per request)
+  // to cover all the user's game interests, not just the first 3.
   let regularCandidates = [];
+  const seenUserIds = new Set();
   try {
-    regularCandidates = await getTopLiveStreams({
-      gameIds,
-      language,
-      excludeUserIds: followedIds,
-      limit: 20,
-    });
+    for (let i = 0; i < gameIds.length; i += 3) {
+      const batch = gameIds.slice(i, i + 3);
+      const streams = await getTopLiveStreams({
+        gameIds: batch,
+        language,
+        excludeUserIds: followedIds,
+        limit: 10,
+      });
+      for (const s of streams) {
+        if (!seenUserIds.has(s.user_id)) {
+          seenUserIds.add(s.user_id);
+          regularCandidates.push(s);
+        }
+      }
+    }
   } catch (err) {
     console.warn("[gapFiller] Could not fetch live streams:", err.message);
     return [];
@@ -194,16 +242,20 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     while (cursor < gap.end.getTime()) {
       const blockEnd = Math.min(cursor + BLOCK_MS, gap.end.getTime());
 
-      // Pick next unused candidate
-      const stream = candidates.find((s) => !usedFillIds.has(s.user_id));
-      if (!stream) break;
+      // Pick next unused candidate; recycle if all have been used
+      let stream = candidates.find((s) => !usedFillIds.has(s.user_id));
+      if (!stream) {
+        if (!candidates.length) break;
+        usedFillIds.clear();
+        stream = candidates[0];
+      }
       usedFillIds.add(stream.user_id);
 
       fillerSlots.push({
         id:            uuidv4(),
         streamerId:    `filler-${stream.user_id}`,
         streamerName:  stream.user_name,
-        streamerColor: "#6B6B88",
+        streamerColor: "#F5BB04",
         platform:      "twitch",
         title:         stream.title,
         category:      stream.game_name,
