@@ -16,13 +16,15 @@ const scheduleRoutes = require("./routes/schedule");
 const platformRoutes = require("./routes/platforms");
 const authRoutes     = require("./routes/auth");
 const creatorRoutes  = require("./routes/creator");
-const discoverRoutes = require("./routes/discover");
+const discoverRoutes      = require("./routes/discover");
+const notificationRoutes  = require("./routes/notifications");
 
 const { requireAuth } = require("./middleware/auth");
 
 const store = require("./data/store");
 const { initDb } = require("./data/db");
 const { fetchSchedulesForAll } = require("./services/scheduleService");
+const { startNotificationScheduler } = require("./services/notificationService");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -56,7 +58,8 @@ app.use("/api/streamers", requireAuth, streamerRoutes);
 app.use("/api/schedule",  requireAuth, scheduleRoutes);
 app.use("/api/platforms", platformRoutes);
 app.use("/api/creator",  creatorRoutes);
-app.use("/api/discover", requireAuth, discoverRoutes);
+app.use("/api/discover",       requireAuth, discoverRoutes);
+app.use("/api/notifications",  requireAuth, notificationRoutes);
 
 // ── Health check ─────────────────────────────────────────────
 // A simple endpoint to confirm the server is running.
@@ -89,6 +92,8 @@ initDb()
     console.log("✅ Database ready");
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`✅ Regulars API running on http://localhost:${PORT}`);
+
+      startNotificationScheduler();
 
       store.getAllStreamers()
         .then((streamers) => fetchSchedulesForAll(streamers))

@@ -355,6 +355,42 @@ async function getActivePaidCreators(excludeChannelIds = []) {
     .map((r) => ({ ...rowToCreator(r), totalViews: r.views_remaining, clicksRemaining: r.clicks_remaining }));
 }
 
+// ── Push notification tokens ──────────────────────────────────
+
+async function savePushToken(userId, token, platform = "expo") {
+  const id = uuidv4();
+  await pool.query(
+    `INSERT INTO push_tokens (id, user_id, token, platform)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id`,
+    [id, userId, token, platform]
+  );
+}
+
+async function removePushToken(token) {
+  await pool.query("DELETE FROM push_tokens WHERE token = $1", [token]);
+}
+
+async function getPushTokensByUser(userId) {
+  const { rows } = await pool.query(
+    "SELECT token, platform FROM push_tokens WHERE user_id = $1",
+    [userId]
+  );
+  return rows;
+}
+
+async function getAllPushTokensGroupedByUser() {
+  const { rows } = await pool.query(
+    "SELECT user_id, token, platform FROM push_tokens ORDER BY user_id"
+  );
+  const grouped = {};
+  for (const row of rows) {
+    if (!grouped[row.user_id]) grouped[row.user_id] = [];
+    grouped[row.user_id].push({ token: row.token, platform: row.platform });
+  }
+  return grouped;
+}
+
 module.exports = {
   PLATFORMS,
   // Users
@@ -383,4 +419,9 @@ module.exports = {
   incrementPackViews,
   decrementPackClicks,
   getActivePaidCreators,
+  // Push tokens
+  savePushToken,
+  removePushToken,
+  getPushTokensByUser,
+  getAllPushTokensGroupedByUser,
 };

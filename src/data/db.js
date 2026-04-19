@@ -120,6 +120,26 @@ async function initDb() {
   await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS last_session_id TEXT`);
   await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS clicks_total INTEGER NOT NULL DEFAULT 0`);
 
+  // Push notification tokens — one row per device per user
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      id         UUID        PRIMARY KEY,
+      user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token      TEXT        NOT NULL,
+      platform   TEXT        NOT NULL DEFAULT 'expo',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'push_tokens_token_key'
+      ) THEN
+        ALTER TABLE push_tokens ADD CONSTRAINT push_tokens_token_key UNIQUE (token);
+      END IF;
+    END $$;
+  `);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`
