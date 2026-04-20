@@ -12,6 +12,7 @@ router.get("/profile",                    requireAuth, creatorController.getProf
 router.post("/profile",                   requireAuth, creatorController.connectChannel);
 router.post("/checkout",                  requireAuth, creatorController.createCheckout);
 router.post("/verify-payment",            requireAuth, creatorController.verifyPayment);
+router.post("/views",                     requireAuth, creatorController.trackViewBatch);
 router.post("/:creatorUserId/view",       requireAuth, creatorController.trackView);
 router.post("/:creatorUserId/click",      requireAuth, creatorController.trackClick);
 

@@ -64,6 +64,16 @@ exports.createCheckout = async (req, res) => {
   res.json({ url: session.url });
 };
 
+// POST /api/creator/views — batch increment view counters
+exports.trackViewBatch = async (req, res) => {
+  const { creatorUserIds } = req.body;
+  if (!Array.isArray(creatorUserIds) || !creatorUserIds.length) {
+    return res.json({ ok: true, count: 0 });
+  }
+  await Promise.all(creatorUserIds.map((id) => store.incrementPackViews(id)));
+  res.json({ ok: true, count: creatorUserIds.length });
+};
+
 // POST /api/creator/:creatorUserId/view — increment view counter (called on filler slot render)
 exports.trackView = async (req, res) => {
   const { creatorUserId } = req.params;

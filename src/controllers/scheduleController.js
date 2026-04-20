@@ -69,8 +69,21 @@ exports.getAll = async (req, res) => {
   res.json(slots);
 };
 
+// In-memory dedup: one XP award per slot per user per day.
+// Key format: "userId:slotId:YYYY-MM-DD". Pruned when it gets large.
+const _clickedSlots = new Set();
+
 // POST /api/schedule/slot-click — award XP for clicking a slot
 exports.slotClick = async (req, res) => {
+  const { slotId } = req.body;
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const dedup = `${req.user.userId}:${slotId ?? "unknown"}:${dayKey}`;
+
+  if (_clickedSlots.has(dedup)) return res.json({ ok: true, duplicate: true });
+
+  _clickedSlots.add(dedup);
+  if (_clickedSlots.size > 50000) _clickedSlots.clear();
+
   await awardXp(req.user.userId, XP.SLOT_CLICK);
   res.json({ ok: true });
 };
