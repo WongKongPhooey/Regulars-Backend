@@ -5,7 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --localstorage-file=.jest-localstorage ./node_modules/jest/bin/jest.js --runInBand",
+    "test:watch": "node --localstorage-file=.jest-localstorage ./node_modules/jest/bin/jest.js --runInBand --watch"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -20,6 +22,7 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.1.3"
   }
 }

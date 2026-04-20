@@ -391,6 +391,24 @@ async function getAllPushTokensGroupedByUser() {
   return grouped;
 }
 
+// ── XP / gamification ────────────────────────────────────────
+
+async function getUserXp(userId) {
+  const { rows } = await pool.query(
+    "SELECT total_xp FROM users WHERE id = $1",
+    [userId]
+  );
+  return rows[0]?.total_xp ?? 0;
+}
+
+async function addUserXp(userId, points) {
+  const { rows } = await pool.query(
+    `UPDATE users SET total_xp = total_xp + $1 WHERE id = $2 RETURNING total_xp`,
+    [points, userId]
+  );
+  return rows[0]?.total_xp ?? 0;
+}
+
 module.exports = {
   PLATFORMS,
   // Users
@@ -424,4 +442,7 @@ module.exports = {
   removePushToken,
   getPushTokensByUser,
   getAllPushTokensGroupedByUser,
+  // XP
+  getUserXp,
+  addUserXp,
 };

@@ -7,6 +7,7 @@
 
 const store = require("../data/store");
 const { fetchScheduleForStreamer, lookupStreamer } = require("../services/scheduleService");
+const { awardXp, XP } = require("../services/xpService");
 
 function buildChannelUrl(platform, channelId) {
   if (platform === "twitch")  return `https://twitch.tv/${channelId}`;
@@ -62,6 +63,11 @@ exports.create = async (req, res) => {
     .catch((err) =>
       console.error(`[streamersController] Schedule fetch failed for ${displayName}:`, err.message)
     );
+
+  // Award XP: extra platform added to an existing person
+  if (personId) {
+    awardXp(userId, XP.ADD_PLATFORM).catch(() => {});
+  }
 
   res.status(201).json(newStreamer);
 };

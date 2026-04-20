@@ -8,6 +8,7 @@
 const store = require("../data/store");
 const { fetchScheduleForStreamer } = require("../services/scheduleService");
 const { getFillersForToday } = require("../services/gapFillerService");
+const { awardXp, XP } = require("../services/xpService");
 
 // GET /api/schedule/week
 exports.getWeek = async (req, res) => {
@@ -66,6 +67,12 @@ exports.getAll = async (req, res) => {
   }
 
   res.json(slots);
+};
+
+// POST /api/schedule/slot-click — award XP for clicking a slot
+exports.slotClick = async (req, res) => {
+  await awardXp(req.user.userId, XP.SLOT_CLICK);
+  res.json({ ok: true });
 };
 
 // POST /api/schedule/refresh/:id

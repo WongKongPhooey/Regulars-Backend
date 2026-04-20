@@ -5,6 +5,7 @@
 const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
 const store = require("../data/store");
+const { getLevelInfo, awardXp, XP } = require("../services/xpService");
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -88,6 +89,12 @@ exports.me = async (req, res) => {
   res.json(user);
 };
 
+// GET /api/auth/xp
+exports.getXp = async (req, res) => {
+  const totalXp = await store.getUserXp(req.user.userId);
+  res.json(getLevelInfo(totalXp));
+};
+
 // ── Twitch connect ────────────────────────────────────────────
 
 // POST /api/auth/twitch/connect
@@ -107,11 +114,19 @@ exports.twitchConnect = async (req, res) => {
 
   const { user_id, login } = await validateRes.json();
 
+  // Award XP only on first Twitch connect
+  const existingUser = await store.getUserById(req.user.userId);
+  const isFirstConnect = !existingUser?.twitchId;
+
   const user = await store.updateUserTwitch(req.user.userId, {
     twitchId:     user_id,
     accessToken,
     refreshToken: null,
   });
+
+  if (isFirstConnect) {
+    await awardXp(req.user.userId, XP.TWITCH_CONNECT);
+  }
 
   res.json({ user, twitchLogin: login });
 };
@@ -183,6 +198,11 @@ exports.twitchImport = async (req, res) => {
       color:       "#6B6B88",
     });
     imported++;
+  }
+
+  // Award XP for each newly imported streamer
+  if (imported > 0) {
+    await awardXp(req.user.userId, XP.TWITCH_SYNC * imported);
   }
 
   res.json({ imported, skipped });

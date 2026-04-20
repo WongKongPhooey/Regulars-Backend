@@ -18,6 +18,9 @@ router.get("/week", scheduleController.getWeek);
 // GET /api/schedule — all slots with optional ?from=&to=&platform= filters
 router.get("/", scheduleController.getAll);
 
+// POST /api/schedule/slot-click — award XP for clicking a schedule slot
+router.post("/slot-click", scheduleController.slotClick);
+
 // POST /api/schedule/refresh/:id — re-fetch schedule for one streamer
 router.post("/refresh/:id", scheduleController.refresh);
 

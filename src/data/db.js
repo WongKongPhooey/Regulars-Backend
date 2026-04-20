@@ -140,6 +140,9 @@ async function initDb() {
     END $$;
   `);
 
+  // XP / gamification — running total per user
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total_xp INTEGER NOT NULL DEFAULT 0`);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`
