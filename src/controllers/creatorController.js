@@ -49,15 +49,42 @@ exports.connectChannel = async (req, res) => {
   res.json(profile);
 };
 
+// GET /api/creator/search?q= — find creators to gift a pack to
+exports.searchCreators = async (req, res) => {
+  const q = (req.query.q ?? "").trim();
+  if (q.length < 2) return res.json([]);
+  const results = await store.searchCreatorProfiles(q, 20);
+  // Never return the buyer themselves as a gift target
+  const filtered = results.filter((r) => r.userId !== req.user.userId);
+  res.json(filtered);
+};
+
 // POST /api/creator/checkout — create a Stripe Checkout session
+// Body: { recipientUserId? } — if present, credits that creator instead of the buyer (gift)
 exports.createCheckout = async (req, res) => {
+  const { recipientUserId } = req.body ?? {};
+
+  // Validate recipient if present — must be a creator with a profile
+  if (recipientUserId) {
+    if (recipientUserId === req.user.userId) {
+      return res.status(400).json({ error: "You can't gift a pack to yourself." });
+    }
+    const recipientProfile = await store.getCreatorProfile(recipientUserId);
+    if (!recipientProfile) {
+      return res.status(404).json({ error: "Recipient is not a connected creator." });
+    }
+  }
+
+  const metadata = { userId: req.user.userId };
+  if (recipientUserId) metadata.recipientUserId = recipientUserId;
+
   const session = await getStripe().checkout.sessions.create({
     mode:                "payment",
     payment_method_types: ["card"],
     line_items: [
       { price: PACK_PRICE_ID, quantity: 1 },
     ],
-    metadata: { userId: req.user.userId },
+    metadata,
     success_url: `${process.env.FRONTEND_URL}?payment=success`,
     cancel_url:  `${process.env.FRONTEND_URL}?payment=cancelled`,
   });
@@ -93,7 +120,7 @@ exports.trackClick = async (req, res) => {
 // This is a fallback for when the webhook hasn't fired yet (e.g. local dev).
 exports.verifyPayment = async (req, res) => {
   const sessions = await getStripe().checkout.sessions.list({
-    limit: 1,
+    limit: 5,
   });
 
   const session = sessions.data.find(
@@ -104,16 +131,24 @@ exports.verifyPayment = async (req, res) => {
     return res.json({ credited: false });
   }
 
+  // Gifts credit the recipient; ordinary packs credit the buyer.
+  const creditedUserId = session.metadata?.recipientUserId || req.user.userId;
+
   // Check if we've already credited this session (store session ID to prevent double-credit)
-  const balance = await store.getPackBalance(req.user.userId);
+  const balance = await store.getPackBalance(creditedUserId);
   if (balance.lastSessionId === session.id) {
-    return res.json({ credited: false, balance });
+    const buyerBalance = await store.getPackBalance(req.user.userId);
+    return res.json({ credited: false, balance: buyerBalance });
   }
 
-  await store.addPackCredits(req.user.userId, PACK_CLICKS, session.id);
+  await store.addPackCredits(creditedUserId, PACK_CLICKS, session.id);
   const updated = await store.getPackBalance(req.user.userId);
-  console.log(`[creator] Verified payment — added ${PACK_CLICKS} clicks to user ${req.user.userId}`);
-  res.json({ credited: true, balance: updated });
+  if (session.metadata?.recipientUserId) {
+    console.log(`[creator] Verified gift — added ${PACK_CLICKS} clicks to recipient ${creditedUserId} (buyer ${req.user.userId})`);
+  } else {
+    console.log(`[creator] Verified payment — added ${PACK_CLICKS} clicks to user ${creditedUserId}`);
+  }
+  res.json({ credited: true, balance: updated, gifted: !!session.metadata?.recipientUserId });
 };
 
 // POST /api/creator/webhook — Stripe sends events here (no auth middleware)
@@ -128,10 +163,16 @@ exports.webhook = async (req, res) => {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
-    const userId  = session.metadata?.userId;
-    if (userId) {
-      await store.addPackCredits(userId, PACK_CLICKS);
-      console.log(`[creator] Added ${PACK_CLICKS} clicks to user ${userId}`);
+    const buyerId    = session.metadata?.userId;
+    const recipientId = session.metadata?.recipientUserId;
+    const creditedId = recipientId || buyerId;
+    if (creditedId) {
+      await store.addPackCredits(creditedId, PACK_CLICKS, session.id);
+      if (recipientId) {
+        console.log(`[creator] Gift — added ${PACK_CLICKS} clicks to recipient ${recipientId} (buyer ${buyerId})`);
+      } else {
+        console.log(`[creator] Added ${PACK_CLICKS} clicks to user ${buyerId}`);
+      }
     }
   }
 

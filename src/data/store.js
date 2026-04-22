@@ -261,6 +261,20 @@ async function getCreatorProfile(userId) {
   return rows[0] ? rowToCreator(rows[0]) : null;
 }
 
+// Search creator profiles by display name (case-insensitive, prefix-like).
+// Used by the gift-a-pack feature to find recipients.
+async function searchCreatorProfiles(query, limit = 20) {
+  const q = `%${query.toLowerCase()}%`;
+  const { rows } = await pool.query(
+    `SELECT * FROM creator_profiles
+     WHERE LOWER(display_name) LIKE $1
+     ORDER BY display_name
+     LIMIT $2`,
+    [q, limit]
+  );
+  return rows.map(rowToCreator);
+}
+
 async function upsertCreatorProfile(data) {
   const id = uuidv4();
   const { rows } = await pool.query(
@@ -431,6 +445,7 @@ module.exports = {
   // Creator profiles
   getCreatorProfile,
   upsertCreatorProfile,
+  searchCreatorProfiles,
   // Promotion packs
   getPackBalance,
   addPackCredits,

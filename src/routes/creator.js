@@ -10,6 +10,7 @@ router.post("/webhook", creatorController.webhook);
 // All other routes require auth
 router.get("/profile",                    requireAuth, creatorController.getProfile);
 router.post("/profile",                   requireAuth, creatorController.connectChannel);
+router.get("/search",                     requireAuth, creatorController.searchCreators);
 router.post("/checkout",                  requireAuth, creatorController.createCheckout);
 router.post("/verify-payment",            requireAuth, creatorController.verifyPayment);
 router.post("/views",                     requireAuth, creatorController.trackViewBatch);
