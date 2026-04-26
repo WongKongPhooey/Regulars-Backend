@@ -31,6 +31,7 @@ function rowToUser(row) {
     name:                 row.name,
     avatarUrl:            row.avatar_url,
     twitchId:             row.twitch_id,
+    youtubeConnected:     !!row.youtube_access_token,
     termsVersionAccepted: row.terms_version_accepted ?? null,
     termsAcceptedAt:      row.terms_accepted_at instanceof Date ? row.terms_accepted_at.toISOString() : (row.terms_accepted_at ?? null),
     createdAt:            row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
@@ -76,7 +77,7 @@ async function findOrCreateUser({ googleId, email, name, avatarUrl }) {
     "SELECT * FROM users WHERE google_id = $1",
     [googleId]
   );
-  if (existing[0]) return rowToUser(existing[0]);
+  if (existing[0]) return { user: rowToUser(existing[0]), created: false };
 
   const id = uuidv4();
   const { rows } = await pool.query(
@@ -85,7 +86,12 @@ async function findOrCreateUser({ googleId, email, name, avatarUrl }) {
      RETURNING *`,
     [id, googleId, email, name, avatarUrl]
   );
-  return rowToUser(rows[0]);
+  return { user: rowToUser(rows[0]), created: true };
+}
+
+async function countUsers() {
+  const { rows } = await pool.query("SELECT COUNT(*)::int AS count FROM users");
+  return rows[0]?.count ?? 0;
 }
 
 async function getUserById(id) {
@@ -118,6 +124,33 @@ async function getUserTwitchTokens(userId) {
     twitchId:     rows[0].twitch_id,
     accessToken:  rows[0].twitch_access_token,
     refreshToken: rows[0].twitch_refresh_token,
+  };
+}
+
+async function updateUserYoutube(userId, { accessToken, refreshToken }) {
+  // Preserve a previously stored refresh_token if Google didn't return a fresh one
+  // (it only returns refresh_token on first consent unless we re-prompt with prompt=consent).
+  const { rows } = await pool.query(
+    `UPDATE users
+     SET youtube_access_token  = $1,
+         youtube_refresh_token = COALESCE($2, youtube_refresh_token),
+         youtube_connected_at  = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    [accessToken, refreshToken ?? null, userId]
+  );
+  return rows[0] ? rowToUser(rows[0]) : null;
+}
+
+async function getUserYoutubeTokens(userId) {
+  const { rows } = await pool.query(
+    "SELECT youtube_access_token, youtube_refresh_token FROM users WHERE id = $1",
+    [userId]
+  );
+  if (!rows[0]) return null;
+  return {
+    accessToken:  rows[0].youtube_access_token,
+    refreshToken: rows[0].youtube_refresh_token,
   };
 }
 
@@ -303,6 +336,7 @@ function rowToPack(row) {
     totalViews:       row.views_remaining,   // repurposed: counts UP (impressions since pack purchase)
     clicksRemaining:  row.clicks_remaining,
     clicksTotal:      row.clicks_total ?? 0, // total clicks received (counts UP)
+    isPaused:         row.is_paused ?? true,
     lastSessionId:    row.last_session_id ?? null,
     updatedAt:        row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
@@ -313,7 +347,18 @@ async function getPackBalance(userId) {
     "SELECT * FROM promotion_packs WHERE user_id = $1",
     [userId]
   );
-  return rows[0] ? rowToPack(rows[0]) : { totalViews: 0, clicksRemaining: 0, clicksTotal: 0 };
+  return rows[0] ? rowToPack(rows[0]) : { totalViews: 0, clicksRemaining: 0, clicksTotal: 0, isPaused: true };
+}
+
+async function setPackPaused(userId, isPaused) {
+  const { rows } = await pool.query(
+    `UPDATE promotion_packs
+     SET is_paused = $1, updated_at = NOW()
+     WHERE user_id = $2
+     RETURNING *`,
+    [!!isPaused, userId]
+  );
+  return rows[0] ? rowToPack(rows[0]) : null;
 }
 
 // Called by Stripe webhook or verify-payment after successful payment.
@@ -363,7 +408,8 @@ async function getActivePaidCreators(excludeChannelIds = []) {
     `SELECT cp.*, pp.views_remaining, pp.clicks_remaining
      FROM creator_profiles cp
      JOIN promotion_packs pp ON pp.user_id = cp.user_id
-     WHERE pp.clicks_remaining > 0`
+     WHERE pp.clicks_remaining > 0
+       AND pp.is_paused = FALSE`
   );
   const excluded = new Set(excludeChannelIds);
   return rows
@@ -468,9 +514,12 @@ module.exports = {
   PLATFORMS,
   // Users
   findOrCreateUser,
+  countUsers,
   getUserById,
   updateUserTwitch,
   getUserTwitchTokens,
+  updateUserYoutube,
+  getUserYoutubeTokens,
   // Streamers
   getAllStreamers,
   getStreamersByUser,
@@ -489,6 +538,7 @@ module.exports = {
   searchCreatorProfiles,
   // Promotion packs
   getPackBalance,
+  setPackPaused,
   addPackCredits,
   incrementPackViews,
   decrementPackClicks,

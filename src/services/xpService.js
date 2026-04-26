@@ -13,6 +13,8 @@ const XP = {
   SLOT_CLICK:       5,   // clicking a streamer slot
   TWITCH_SYNC:      10,  // each new streamer synced from Twitch
   TWITCH_CONNECT:   25,  // connecting personal Twitch account
+  YOUTUBE_SYNC:     10,  // each new streamer synced from YouTube subscriptions
+  YOUTUBE_CONNECT:  25,  // connecting personal YouTube account
   ADD_PLATFORM:     5,   // adding an extra platform to a streamer
 };
 

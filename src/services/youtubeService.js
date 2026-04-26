@@ -160,6 +160,52 @@ async function fetchSchedule(streamer) {
   return slots;
 }
 
+// ── Recent uploads (for the "you might have missed this" gap filler) ──
+//
+// Uses the channel's uploads playlist (UU{rest of ID}) which costs 1 quota
+// unit per call vs 100 for search.list. Caches results in-memory for 15
+// minutes since uploads happen every few hours at most.
+const _uploadsCache = new Map(); // channelId -> { fetchedAt, uploads }
+const UPLOADS_CACHE_TTL_MS = 15 * 60 * 1000;
+
+async function getRecentUploads(channelId, maxAgeHours = 24) {
+  if (!channelId?.startsWith("UC")) return [];
+
+  const cached = _uploadsCache.get(channelId);
+  if (cached && Date.now() - cached.fetchedAt < UPLOADS_CACHE_TTL_MS) {
+    return cached.uploads.filter(
+      (u) => Date.now() - new Date(u.publishedAt).getTime() < maxAgeHours * 3600 * 1000
+    );
+  }
+
+  const uploadsPlaylistId = "UU" + channelId.slice(2);
+  let items = [];
+  try {
+    const data = await ytGet("/playlistItems", {
+      part:       "snippet,contentDetails",
+      playlistId: uploadsPlaylistId,
+      maxResults: "5",
+    });
+    items = data.items ?? [];
+  } catch (err) {
+    console.warn(`[YouTube] uploads fetch failed for ${channelId}: ${err.message}`);
+    return [];
+  }
+
+  const uploads = items
+    .map((item) => ({
+      videoId:     item.contentDetails.videoId,
+      publishedAt: item.contentDetails.videoPublishedAt ?? item.snippet.publishedAt,
+      title:       item.snippet.title,
+      thumbnail:   item.snippet.thumbnails?.medium?.url ?? item.snippet.thumbnails?.default?.url,
+    }));
+
+  _uploadsCache.set(channelId, { fetchedAt: Date.now(), uploads });
+
+  const cutoff = Date.now() - maxAgeHours * 3600 * 1000;
+  return uploads.filter((u) => new Date(u.publishedAt).getTime() > cutoff);
+}
+
 // ── Look up a channel by ID ───────────────────────────────────
 // channelId should be in UC... format. Used to validate and
 // populate profile data when adding a new streamer.
@@ -180,4 +226,4 @@ async function lookupStreamer(channelId) {
   };
 }
 
-module.exports = { fetchSchedule, lookupStreamer };
+module.exports = { fetchSchedule, lookupStreamer, getRecentUploads };

@@ -23,6 +23,12 @@ router.post("/twitch/connect", requireAuth, authController.twitchConnect);
 // POST /api/auth/twitch/import — import Twitch followed channels as streamers (requires JWT)
 router.post("/twitch/import", requireAuth, authController.twitchImport);
 
+// POST /api/auth/youtube/connect — exchange a Google PKCE code (youtube.readonly scope)
+router.post("/youtube/connect", requireAuth, authController.youtubeConnect);
+
+// POST /api/auth/youtube/import — import YouTube subscriptions as streamers
+router.post("/youtube/import",  requireAuth, authController.youtubeImport);
+
 // POST /api/auth/accept-terms — record acceptance of the current legal version
 router.post("/accept-terms", requireAuth, authController.acceptTerms);
 

@@ -12,6 +12,7 @@
 
 const { v4: uuidv4 } = require("uuid");
 const { getChannelInfo, getTopLiveStreams, getGamesByName, getLiveStreamsByLogins } = require("./twitchService");
+const { getRecentUploads } = require("./youtubeService");
 const store = require("../data/store");
 
 const MIN_GAP_MINUTES = 15; // ignore gaps shorter than this
@@ -57,8 +58,8 @@ function findGaps(slots, todayStart, todayEnd) {
 // userId     — the requesting user's ID (used to find paid creators to exclude)
 // Returns an array of filler slot objects (never stored in DB).
 async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId }) {
-  const twitchStreamers = streamers.filter((s) => s.platform === "twitch");
-  if (!twitchStreamers.length) return [];
+  const twitchStreamers  = streamers.filter((s) => s.platform === "twitch");
+  const youtubeStreamers = streamers.filter((s) => s.platform === "youtube");
 
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
@@ -68,6 +69,45 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
   const gaps = findGaps(todaySlots, todayStart, todayEnd);
   if (!gaps.length) return [];
 
+  // ── Followed YouTube uploads (highest-priority gap filler) ─────
+  // For every YouTube channel the user follows, surface anything they've
+  // uploaded in the last 24h that isn't already in their schedule.
+  let youtubeUploadCandidates = [];
+  if (youtubeStreamers.length) {
+    const settled = await Promise.allSettled(
+      youtubeStreamers.map(async (s) => {
+        const uploads = await getRecentUploads(s.channelId, 24);
+        return uploads.map((u) => ({ ...u, streamer: s }));
+      })
+    );
+    for (const r of settled) {
+      if (r.status === "fulfilled") youtubeUploadCandidates.push(...r.value);
+    }
+    // Newest first
+    youtubeUploadCandidates.sort(
+      (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)
+    );
+  }
+
+  const youtubeUploadSlots = youtubeUploadCandidates.map((u) => ({
+    user_id:           `yt-upload-${u.videoId}`,
+    user_login:        u.streamer.channelId,
+    user_name:         u.streamer.displayName,
+    title:             u.title,
+    game_name:         "Recent upload",
+    viewer_count:      0,
+    thumbnail_url:     u.thumbnail,
+    platform:          "youtube",
+    channelUrl:        `https://youtube.com/watch?v=${u.videoId}`,
+    isLive:            false,
+    isFollowerUpload:  true,
+  }));
+
+  // If the user has no Twitch streamers, the YouTube uploads alone fill gaps.
+  if (!twitchStreamers.length) {
+    return packCandidatesIntoGaps(youtubeUploadSlots, gaps);
+  }
+
   // Profile the user's streamers — language from channel info, games from stored slots
   const logins = twitchStreamers.map((s) => s.channelId);
   let channelInfos = [];
@@ -75,7 +115,7 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     channelInfos = await getChannelInfo(logins);
   } catch (err) {
     console.warn("[gapFiller] Could not fetch channel info:", err.message);
-    return [];
+    return packCandidatesIntoGaps(youtubeUploadSlots, gaps);
   }
 
   // Language: pick most common from channel settings
@@ -230,19 +270,24 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
     return [];
   }
 
-  // Paid creators appear first; regulars fill the rest
-  let candidates = [...paidCandidates, ...regularCandidates];
+  // Followed YT uploads first (highest priority — channels you actually watch),
+  // then paid creators, then discovery streams.
+  const candidates = [...youtubeUploadSlots, ...paidCandidates, ...regularCandidates];
 
-  // Each gap gets its own filler stream, split into ~2hr blocks so the
-  // day view doesn't have one enormous card spanning the whole day.
-  const BLOCK_MS = 2 * 60 * 60 * 1000; // 2 hours
+  return packCandidatesIntoGaps(candidates, gaps, fillerSlots, usedFillIds);
+}
+
+// ── Pack candidates into gaps ─────────────────────────────────
+// Splits each gap into ~2hr blocks and assigns one candidate per block,
+// recycling once all candidates have been used.
+function packCandidatesIntoGaps(candidates, gaps, fillerSlots = [], usedFillIds = new Set()) {
+  const BLOCK_MS = 2 * 60 * 60 * 1000;
 
   for (const gap of gaps) {
     let cursor = gap.start.getTime();
     while (cursor < gap.end.getTime()) {
       const blockEnd = Math.min(cursor + BLOCK_MS, gap.end.getTime());
 
-      // Pick next unused candidate; recycle if all have been used
       let stream = candidates.find((s) => !usedFillIds.has(s.user_id));
       if (!stream) {
         if (!candidates.length) break;
@@ -251,23 +296,28 @@ async function getFillersForToday({ streamers, todaySlots, allSlots = [], userId
       }
       usedFillIds.add(stream.user_id);
 
+      const platform = stream.platform ?? "twitch";
+      const channelUrl =
+        stream.channelUrl ?? `https://twitch.tv/${stream.user_login}`;
+
       fillerSlots.push({
-        id:            uuidv4(),
-        streamerId:    `filler-${stream.user_id}`,
-        streamerName:  stream.user_name,
-        streamerColor: "#F5BB04",
-        platform:      "twitch",
-        title:         stream.title,
-        category:      stream.game_name,
-        startTime:     new Date(cursor).toISOString(),
-        endTime:       new Date(blockEnd).toISOString(),
-        channelUrl:    `https://twitch.tv/${stream.user_login}`,
-        isLive:        true,
-        isFiller:      true,
-        isPremium:     stream.isPremium ?? false,
-        creatorUserId: stream.creatorUserId ?? null,
-        viewerCount:   stream.viewer_count,
-        thumbnailUrl:  stream.thumbnail_url
+        id:               uuidv4(),
+        streamerId:       `filler-${stream.user_id}`,
+        streamerName:     stream.user_name,
+        streamerColor:    "#F5BB04",
+        platform,
+        title:            stream.title,
+        category:         stream.game_name,
+        startTime:        new Date(cursor).toISOString(),
+        endTime:          new Date(blockEnd).toISOString(),
+        channelUrl,
+        isLive:           stream.isLive ?? true,
+        isFiller:         true,
+        isPremium:        stream.isPremium ?? false,
+        isFollowerUpload: stream.isFollowerUpload ?? false,
+        creatorUserId:    stream.creatorUserId ?? null,
+        viewerCount:      stream.viewer_count,
+        thumbnailUrl:     stream.thumbnail_url
           ?.replace("{width}", "320")
           .replace("{height}", "180"),
       });

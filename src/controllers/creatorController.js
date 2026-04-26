@@ -104,6 +104,20 @@ exports.createCheckout = async (req, res) => {
   res.json({ url: session.url });
 };
 
+// POST /api/creator/pause — pause/resume boosting of own channel
+// Body: { isPaused: boolean }
+exports.setPaused = async (req, res) => {
+  const { isPaused } = req.body ?? {};
+  if (typeof isPaused !== "boolean") {
+    return res.status(400).json({ error: "isPaused (boolean) is required" });
+  }
+  const balance = await store.setPackPaused(req.user.userId, isPaused);
+  if (!balance) {
+    return res.status(404).json({ error: "No pack to pause/resume — buy a pack first." });
+  }
+  res.json({ balance });
+};
+
 // POST /api/creator/views — batch increment view counters
 exports.trackViewBatch = async (req, res) => {
   const { creatorUserIds } = req.body;

@@ -13,6 +13,7 @@ router.post("/profile",                   requireAuth, creatorController.connect
 router.get("/search",                     requireAuth, creatorController.searchCreators);
 router.post("/checkout",                  requireAuth, creatorController.createCheckout);
 router.post("/verify-payment",            requireAuth, creatorController.verifyPayment);
+router.post("/pause",                     requireAuth, creatorController.setPaused);
 router.post("/views",                     requireAuth, creatorController.trackViewBatch);
 router.post("/:creatorUserId/view",       requireAuth, creatorController.trackView);
 router.post("/:creatorUserId/click",      requireAuth, creatorController.trackClick);

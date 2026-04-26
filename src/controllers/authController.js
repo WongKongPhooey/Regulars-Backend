@@ -77,12 +77,24 @@ exports.googleSignIn = async (req, res) => {
     payload = await userInfoRes.json();
   }
 
-  const user = await store.findOrCreateUser({
+  const { user, created } = await store.findOrCreateUser({
     googleId:  payload.sub,
     email:     payload.email,
     name:      payload.name,
     avatarUrl: payload.picture,
   });
+
+  // Free welcome pack for the first N signups (configurable via env).
+  if (created) {
+    const freeLimit = parseInt(process.env.FREE_SIGNUP_PACK_LIMIT ?? "0", 10);
+    if (freeLimit > 0) {
+      const total = await store.countUsers();
+      if (total <= freeLimit) {
+        await store.addPackCredits(user.id, 100, `free-signup-${user.id}`);
+        console.log(`[auth] Granted free signup pack to user ${user.id} (#${total} of ${freeLimit})`);
+      }
+    }
+  }
 
   const token = jwt.sign(
     { userId: user.id },
@@ -112,6 +124,123 @@ exports.acceptTerms = async (req, res) => {
   const user = await store.recordTermsAcceptance(req.user.userId, CURRENT_TERMS_VERSION);
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json(await decorateUser(user));
+};
+
+// ── YouTube connect + import ─────────────────────────────────
+
+// POST /api/auth/youtube/connect
+// Exchanges a Google PKCE code (with the youtube.readonly scope) for tokens
+// and stores them on the user. Mirrors the /auth/google PKCE exchange.
+exports.youtubeConnect = async (req, res) => {
+  const { code, codeVerifier, redirectUri } = req.body;
+  if (!code || !codeVerifier || !redirectUri) {
+    return res.status(400).json({ error: "code, codeVerifier and redirectUri are required" });
+  }
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id:     process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      code_verifier: codeVerifier,
+      grant_type:    "authorization_code",
+      redirect_uri:  redirectUri,
+    }).toString(),
+  });
+
+  if (!tokenRes.ok) {
+    const err = await tokenRes.json();
+    console.error("[auth] YouTube code exchange failed:", err);
+    return res.status(401).json({ error: "YouTube code exchange failed" });
+  }
+
+  const tokens = await tokenRes.json();
+  const existingTokens = await store.getUserYoutubeTokens(req.user.userId);
+  const isFirstConnect = !existingTokens?.accessToken;
+
+  const user = await store.updateUserYoutube(req.user.userId, {
+    accessToken:  tokens.access_token,
+    refreshToken: tokens.refresh_token ?? null,
+  });
+
+  if (isFirstConnect) {
+    await awardXp(req.user.userId, XP.YOUTUBE_CONNECT);
+  }
+
+  res.json({ user: await decorateUser(user) });
+};
+
+// POST /api/auth/youtube/import — fetch the user's YouTube subscriptions and
+// add any not-yet-followed ones as streamers.
+exports.youtubeImport = async (req, res) => {
+  const tokens = await store.getUserYoutubeTokens(req.user.userId);
+  if (!tokens?.accessToken) {
+    return res.status(400).json({ error: "YouTube account not connected" });
+  }
+
+  // Page through subscriptions (50 per page, hard cap at 200)
+  const subscriptions = [];
+  let pageToken = null;
+  const HARD_CAP = 200;
+
+  do {
+    const url = new URL("https://www.googleapis.com/youtube/v3/subscriptions");
+    url.searchParams.set("part",       "snippet");
+    url.searchParams.set("mine",       "true");
+    url.searchParams.set("maxResults", "50");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const subRes = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+    });
+
+    if (!subRes.ok) {
+      const body = await subRes.json().catch(() => ({}));
+      console.error("[youtubeImport] subscriptions fetch failed:", subRes.status, body);
+      return res.status(502).json({ error: "Failed to fetch YouTube subscriptions — please reconnect your account" });
+    }
+
+    const { items, nextPageToken } = await subRes.json();
+    subscriptions.push(...(items ?? []));
+    pageToken = nextPageToken;
+  } while (pageToken && subscriptions.length < HARD_CAP);
+
+  if (!subscriptions.length) {
+    return res.json({ imported: 0, skipped: 0 });
+  }
+
+  const existing = await store.getStreamersByUser(req.user.userId);
+  const existingKeys = new Set(
+    existing.filter((s) => s.platform === "youtube").map((s) => s.channelId)
+  );
+
+  let imported = 0;
+  let skipped  = 0;
+
+  for (const sub of subscriptions) {
+    const channelId = sub.snippet?.resourceId?.channelId;
+    if (!channelId) continue;
+    if (existingKeys.has(channelId)) { skipped++; continue; }
+
+    await store.addStreamer({
+      userId:      req.user.userId,
+      displayName: sub.snippet.title,
+      platform:    "youtube",
+      channelId,
+      channelUrl:  `https://youtube.com/channel/${channelId}`,
+      avatarUrl:   sub.snippet.thumbnails?.default?.url ?? null,
+      color:       "#6B6B88",
+    });
+    imported++;
+  }
+
+  if (imported > 0) {
+    await awardXp(req.user.userId, XP.YOUTUBE_SYNC * imported);
+  }
+
+  res.json({ imported, skipped });
 };
 
 // DELETE /api/auth/account — GDPR right to erasure / Apple+Google requirement.

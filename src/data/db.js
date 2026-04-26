@@ -120,6 +120,16 @@ async function initDb() {
   await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS last_session_id TEXT`);
   await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS clicks_total INTEGER NOT NULL DEFAULT 0`);
 
+  // Boost on/off — packs default to paused when first credited so the buyer
+  // explicitly opts in to start spending clicks.
+  await pool.query(`ALTER TABLE promotion_packs ADD COLUMN IF NOT EXISTS is_paused BOOLEAN NOT NULL DEFAULT TRUE`);
+
+  // YouTube account connection — refresh token only granted on first consent
+  // (Google PKCE flow), so we keep what we have and re-prompt if it's missing.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS youtube_access_token  TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS youtube_refresh_token TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS youtube_connected_at  TIMESTAMPTZ`);
+
   // Push notification tokens — one row per device per user
   await pool.query(`
     CREATE TABLE IF NOT EXISTS push_tokens (
