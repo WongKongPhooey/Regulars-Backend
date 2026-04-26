@@ -18,6 +18,7 @@ const authRoutes     = require("./routes/auth");
 const creatorRoutes  = require("./routes/creator");
 const discoverRoutes      = require("./routes/discover");
 const notificationRoutes  = require("./routes/notifications");
+const adminRoutes         = require("./routes/admin");
 
 const { requireAuth } = require("./middleware/auth");
 
@@ -60,6 +61,7 @@ app.use("/api/platforms", platformRoutes);
 app.use("/api/creator",  creatorRoutes);
 app.use("/api/discover",       requireAuth, discoverRoutes);
 app.use("/api/notifications",  requireAuth, notificationRoutes);
+app.use("/api/admin",          adminRoutes);
 
 // ── Health check ─────────────────────────────────────────────
 // A simple endpoint to confirm the server is running.

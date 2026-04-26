@@ -405,6 +405,22 @@ async function getAllPushTokensGroupedByUser() {
   return grouped;
 }
 
+// ── Pack purchase audit log ──────────────────────────────────
+
+// Insert a row for a paid checkout. Returns true if newly inserted,
+// false if the session was already logged (idempotent via unique constraint).
+async function recordPackPurchase({ buyerUserId, recipientUserId, sessionId, clicks, amountPence, currency }) {
+  const id = uuidv4();
+  const { rowCount } = await pool.query(
+    `INSERT INTO pack_purchases
+       (id, buyer_user_id, recipient_user_id, stripe_session_id, clicks, amount_pence, currency)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (stripe_session_id) DO NOTHING`,
+    [id, buyerUserId, recipientUserId ?? null, sessionId, clicks, amountPence ?? null, currency ?? null]
+  );
+  return rowCount > 0;
+}
+
 // ── XP / gamification ────────────────────────────────────────
 
 async function getUserXp(userId) {
@@ -460,4 +476,6 @@ module.exports = {
   // XP
   getUserXp,
   addUserXp,
+  // Audit
+  recordPackPurchase,
 };

@@ -143,6 +143,20 @@ async function initDb() {
   // XP / gamification — running total per user
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total_xp INTEGER NOT NULL DEFAULT 0`);
 
+  // Pack purchases audit log — one row per successful Stripe checkout
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pack_purchases (
+      id                 UUID        PRIMARY KEY,
+      buyer_user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_user_id  UUID        REFERENCES users(id) ON DELETE SET NULL,
+      stripe_session_id  TEXT        NOT NULL UNIQUE,
+      clicks             INTEGER     NOT NULL,
+      amount_pence       INTEGER,
+      currency           TEXT,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`

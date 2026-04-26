@@ -6,6 +6,12 @@ const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
 const store = require("../data/store");
 const { getLevelInfo, awardXp, XP } = require("../services/xpService");
+const { isAdminUser } = require("../middleware/admin");
+
+async function withIsAdmin(user) {
+  if (!user) return user;
+  return { ...user, isAdmin: await isAdminUser(user.id) };
+}
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -79,14 +85,14 @@ exports.googleSignIn = async (req, res) => {
     { expiresIn: "30d" }
   );
 
-  res.json({ token, user });
+  res.json({ token, user: await withIsAdmin(user) });
 };
 
 // GET /api/auth/me
 exports.me = async (req, res) => {
   const user = await store.getUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json(user);
+  res.json(await withIsAdmin(user));
 };
 
 // GET /api/auth/xp
@@ -128,7 +134,7 @@ exports.twitchConnect = async (req, res) => {
     await awardXp(req.user.userId, XP.TWITCH_CONNECT);
   }
 
-  res.json({ user, twitchLogin: login });
+  res.json({ user: await withIsAdmin(user), twitchLogin: login });
 };
 
 // ── Twitch import ─────────────────────────────────────────────

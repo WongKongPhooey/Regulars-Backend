@@ -142,6 +142,14 @@ exports.verifyPayment = async (req, res) => {
   }
 
   await store.addPackCredits(creditedUserId, PACK_CLICKS, session.id);
+  await store.recordPackPurchase({
+    buyerUserId:     req.user.userId,
+    recipientUserId: session.metadata?.recipientUserId || null,
+    sessionId:       session.id,
+    clicks:          PACK_CLICKS,
+    amountPence:     session.amount_total ?? null,
+    currency:        session.currency ?? null,
+  });
   const updated = await store.getPackBalance(req.user.userId);
   if (session.metadata?.recipientUserId) {
     console.log(`[creator] Verified gift — added ${PACK_CLICKS} clicks to recipient ${creditedUserId} (buyer ${req.user.userId})`);
@@ -168,6 +176,14 @@ exports.webhook = async (req, res) => {
     const creditedId = recipientId || buyerId;
     if (creditedId) {
       await store.addPackCredits(creditedId, PACK_CLICKS, session.id);
+      await store.recordPackPurchase({
+        buyerUserId:     buyerId,
+        recipientUserId: recipientId || null,
+        sessionId:       session.id,
+        clicks:          PACK_CLICKS,
+        amountPence:     session.amount_total ?? null,
+        currency:        session.currency ?? null,
+      });
       if (recipientId) {
         console.log(`[creator] Gift — added ${PACK_CLICKS} clicks to recipient ${recipientId} (buyer ${buyerId})`);
       } else {
