@@ -26,12 +26,14 @@ const PLATFORMS = {
 // ── Row mappers ───────────────────────────────────────────────
 function rowToUser(row) {
   return {
-    id:        row.id,
-    email:     row.email,
-    name:      row.name,
-    avatarUrl: row.avatar_url,
-    twitchId:  row.twitch_id,
-    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    id:                   row.id,
+    email:                row.email,
+    name:                 row.name,
+    avatarUrl:            row.avatar_url,
+    twitchId:             row.twitch_id,
+    termsVersionAccepted: row.terms_version_accepted ?? null,
+    termsAcceptedAt:      row.terms_accepted_at instanceof Date ? row.terms_accepted_at.toISOString() : (row.terms_accepted_at ?? null),
+    createdAt:            row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
   };
 }
 
@@ -409,15 +411,38 @@ async function getAllPushTokensGroupedByUser() {
 
 // Insert a row for a paid checkout. Returns true if newly inserted,
 // false if the session was already logged (idempotent via unique constraint).
-async function recordPackPurchase({ buyerUserId, recipientUserId, sessionId, clicks, amountPence, currency }) {
+async function recordPackPurchase({ buyerUserId, recipientUserId, sessionId, clicks, amountPence, currency, consentImmediate }) {
   const id = uuidv4();
   const { rowCount } = await pool.query(
     `INSERT INTO pack_purchases
-       (id, buyer_user_id, recipient_user_id, stripe_session_id, clicks, amount_pence, currency)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (id, buyer_user_id, recipient_user_id, stripe_session_id, clicks, amount_pence, currency, consent_immediate)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (stripe_session_id) DO NOTHING`,
-    [id, buyerUserId, recipientUserId ?? null, sessionId, clicks, amountPence ?? null, currency ?? null]
+    [id, buyerUserId, recipientUserId ?? null, sessionId, clicks, amountPence ?? null, currency ?? null, !!consentImmediate]
   );
+  return rowCount > 0;
+}
+
+// ── Terms acceptance + account deletion ─────────────────────
+
+async function recordTermsAcceptance(userId, version) {
+  const { rows } = await pool.query(
+    `UPDATE users
+     SET terms_version_accepted = $1,
+         terms_accepted_at      = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [version, userId]
+  );
+  return rows[0] ? rowToUser(rows[0]) : null;
+}
+
+async function deleteUser(userId) {
+  // ON DELETE CASCADE on streamers, creator_profiles, promotion_packs,
+  // push_tokens, and pack_purchases.buyer_user_id wipes downstream rows.
+  // pack_purchases.recipient_user_id is ON DELETE SET NULL so gift records
+  // remain auditable.
+  const { rowCount } = await pool.query("DELETE FROM users WHERE id = $1", [userId]);
   return rowCount > 0;
 }
 
@@ -478,4 +503,7 @@ module.exports = {
   addUserXp,
   // Audit
   recordPackPurchase,
+  // Terms / account
+  recordTermsAcceptance,
+  deleteUser,
 };

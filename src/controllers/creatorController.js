@@ -60,9 +60,19 @@ exports.searchCreators = async (req, res) => {
 };
 
 // POST /api/creator/checkout — create a Stripe Checkout session
-// Body: { recipientUserId? } — if present, credits that creator instead of the buyer (gift)
+// Body:
+//   recipientUserId?   — if present, credits that creator instead of the buyer (gift)
+//   consentImmediate?  — UK consumer-law waiver of the 14-day cooling-off period
+//                        for digital goods. Required for the pack to be usable
+//                        immediately after payment.
 exports.createCheckout = async (req, res) => {
-  const { recipientUserId } = req.body ?? {};
+  const { recipientUserId, consentImmediate } = req.body ?? {};
+
+  if (!consentImmediate) {
+    return res.status(400).json({
+      error: "You must waive the 14-day cooling-off period to receive your pack immediately.",
+    });
+  }
 
   // Validate recipient if present — must be a creator with a profile
   if (recipientUserId) {
@@ -75,7 +85,10 @@ exports.createCheckout = async (req, res) => {
     }
   }
 
-  const metadata = { userId: req.user.userId };
+  const metadata = {
+    userId: req.user.userId,
+    consentImmediate: "true",
+  };
   if (recipientUserId) metadata.recipientUserId = recipientUserId;
 
   const session = await getStripe().checkout.sessions.create({
@@ -143,12 +156,13 @@ exports.verifyPayment = async (req, res) => {
 
   await store.addPackCredits(creditedUserId, PACK_CLICKS, session.id);
   await store.recordPackPurchase({
-    buyerUserId:     req.user.userId,
-    recipientUserId: session.metadata?.recipientUserId || null,
-    sessionId:       session.id,
-    clicks:          PACK_CLICKS,
-    amountPence:     session.amount_total ?? null,
-    currency:        session.currency ?? null,
+    buyerUserId:      req.user.userId,
+    recipientUserId:  session.metadata?.recipientUserId || null,
+    sessionId:        session.id,
+    clicks:           PACK_CLICKS,
+    amountPence:      session.amount_total ?? null,
+    currency:         session.currency ?? null,
+    consentImmediate: session.metadata?.consentImmediate === "true",
   });
   const updated = await store.getPackBalance(req.user.userId);
   if (session.metadata?.recipientUserId) {
@@ -177,12 +191,13 @@ exports.webhook = async (req, res) => {
     if (creditedId) {
       await store.addPackCredits(creditedId, PACK_CLICKS, session.id);
       await store.recordPackPurchase({
-        buyerUserId:     buyerId,
-        recipientUserId: recipientId || null,
-        sessionId:       session.id,
-        clicks:          PACK_CLICKS,
-        amountPence:     session.amount_total ?? null,
-        currency:        session.currency ?? null,
+        buyerUserId:      buyerId,
+        recipientUserId:  recipientId || null,
+        sessionId:        session.id,
+        clicks:           PACK_CLICKS,
+        amountPence:      session.amount_total ?? null,
+        currency:         session.currency ?? null,
+        consentImmediate: session.metadata?.consentImmediate === "true",
       });
       if (recipientId) {
         console.log(`[creator] Gift — added ${PACK_CLICKS} clicks to recipient ${recipientId} (buyer ${buyerId})`);

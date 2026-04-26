@@ -157,6 +157,33 @@ async function initDb() {
     );
   `);
 
+  // UK consumer law: explicit waiver of the 14-day cooling-off period
+  // for digital goods, captured at checkout.
+  await pool.query(`ALTER TABLE pack_purchases ADD COLUMN IF NOT EXISTS consent_immediate BOOLEAN NOT NULL DEFAULT FALSE`);
+
+  // UK tax law requires retaining transaction records for 6 years, so a buyer
+  // deletion shouldn't cascade-delete their purchase rows. Flip the FK to SET NULL.
+  await pool.query(`ALTER TABLE pack_purchases ALTER COLUMN buyer_user_id DROP NOT NULL`);
+  await pool.query(`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.referential_constraints
+        WHERE constraint_name = 'pack_purchases_buyer_user_id_fkey'
+          AND delete_rule = 'CASCADE'
+      ) THEN
+        ALTER TABLE pack_purchases DROP CONSTRAINT pack_purchases_buyer_user_id_fkey;
+        ALTER TABLE pack_purchases
+          ADD CONSTRAINT pack_purchases_buyer_user_id_fkey
+          FOREIGN KEY (buyer_user_id) REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  // Terms / privacy acceptance — version + timestamp recorded at first sign-in
+  // and on each subsequent re-acceptance when the version is bumped.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version_accepted INTEGER`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at      TIMESTAMPTZ`);
+
   // Add person_id — groups multiple platform entries for the same real-world creator.
   // Defaults to the streamer's own id so existing rows get a stable person_id automatically.
   await pool.query(`

@@ -7,10 +7,15 @@ const jwt = require("jsonwebtoken");
 const store = require("../data/store");
 const { getLevelInfo, awardXp, XP } = require("../services/xpService");
 const { isAdminUser } = require("../middleware/admin");
+const { CURRENT_TERMS_VERSION } = require("../services/legalService");
 
-async function withIsAdmin(user) {
+async function decorateUser(user) {
   if (!user) return user;
-  return { ...user, isAdmin: await isAdminUser(user.id) };
+  return {
+    ...user,
+    isAdmin: await isAdminUser(user.id),
+    currentTermsVersion: CURRENT_TERMS_VERSION,
+  };
 }
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -85,20 +90,38 @@ exports.googleSignIn = async (req, res) => {
     { expiresIn: "30d" }
   );
 
-  res.json({ token, user: await withIsAdmin(user) });
+  res.json({ token, user: await decorateUser(user) });
 };
 
 // GET /api/auth/me
 exports.me = async (req, res) => {
   const user = await store.getUserById(req.user.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json(await withIsAdmin(user));
+  res.json(await decorateUser(user));
 };
 
 // GET /api/auth/xp
 exports.getXp = async (req, res) => {
   const totalXp = await store.getUserXp(req.user.userId);
   res.json(getLevelInfo(totalXp));
+};
+
+// POST /api/auth/accept-terms — record that the user has read & accepted
+// the current Privacy Policy + Terms of Service.
+exports.acceptTerms = async (req, res) => {
+  const user = await store.recordTermsAcceptance(req.user.userId, CURRENT_TERMS_VERSION);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json(await decorateUser(user));
+};
+
+// DELETE /api/auth/account — GDPR right to erasure / Apple+Google requirement.
+// Hard-deletes the user; cascade clears streamers, creator profile, packs,
+// push tokens. Pack-purchase rows persist (FK set to NULL) for tax records.
+exports.deleteAccount = async (req, res) => {
+  const ok = await store.deleteUser(req.user.userId);
+  if (!ok) return res.status(404).json({ error: "User not found" });
+  console.log(`[auth] Account deleted: ${req.user.userId}`);
+  res.json({ deleted: true });
 };
 
 // ── Twitch connect ────────────────────────────────────────────
@@ -134,7 +157,7 @@ exports.twitchConnect = async (req, res) => {
     await awardXp(req.user.userId, XP.TWITCH_CONNECT);
   }
 
-  res.json({ user: await withIsAdmin(user), twitchLogin: login });
+  res.json({ user: await decorateUser(user), twitchLogin: login });
 };
 
 // ── Twitch import ─────────────────────────────────────────────

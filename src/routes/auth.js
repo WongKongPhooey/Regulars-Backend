@@ -23,4 +23,10 @@ router.post("/twitch/connect", requireAuth, authController.twitchConnect);
 // POST /api/auth/twitch/import — import Twitch followed channels as streamers (requires JWT)
 router.post("/twitch/import", requireAuth, authController.twitchImport);
 
+// POST /api/auth/accept-terms — record acceptance of the current legal version
+router.post("/accept-terms", requireAuth, authController.acceptTerms);
+
+// DELETE /api/auth/account — permanently delete the signed-in user's account
+router.delete("/account", requireAuth, authController.deleteAccount);
+
 module.exports = router;
