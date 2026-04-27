@@ -492,6 +492,29 @@ async function deleteUser(userId) {
   return rowCount > 0;
 }
 
+// ── Shared guide links ───────────────────────────────────────
+
+async function createSharedGuide({ userId, token, guideDate }) {
+  await pool.query(
+    `INSERT INTO shared_guides (token, user_id, guide_date)
+     VALUES ($1, $2, $3)`,
+    [token, userId, guideDate]
+  );
+  return { token, userId, guideDate };
+}
+
+async function getSharedGuide(token) {
+  const { rows } = await pool.query(
+    "SELECT token, user_id, guide_date FROM shared_guides WHERE token = $1",
+    [token]
+  );
+  if (!rows[0]) return null;
+  const guideDate = rows[0].guide_date instanceof Date
+    ? rows[0].guide_date.toISOString().slice(0, 10)
+    : rows[0].guide_date;
+  return { token: rows[0].token, userId: rows[0].user_id, guideDate };
+}
+
 // ── XP / gamification ────────────────────────────────────────
 
 async function getUserXp(userId) {
@@ -556,4 +579,7 @@ module.exports = {
   // Terms / account
   recordTermsAcceptance,
   deleteUser,
+  // Shared guides
+  createSharedGuide,
+  getSharedGuide,
 };

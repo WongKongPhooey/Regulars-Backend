@@ -202,6 +202,15 @@ async function initDb() {
   await pool.query(`
     UPDATE streamers SET person_id = id WHERE person_id IS NULL;
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shared_guides (
+      token       TEXT        PRIMARY KEY,
+      user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      guide_date  DATE        NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
 }
 
 module.exports = { pool, initDb };
